@@ -18,11 +18,14 @@
 //! ageing writes no file and fires nothing.
 
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::api::{
     ListSessionsResponse, Notification, NotificationType, SessionSummary, SplitTreeNode,
@@ -143,6 +146,8 @@ pub struct Watcher {
     status: Store,
     /// The last snapshot handed to the UI, so nothing is sent twice.
     emitted: Snapshot,
+    /// Where to record each emission, under `OKO_DEBUG_EMITS`. See [`log_emit`].
+    emits_log: Option<PathBuf>,
 }
 
 impl Watcher {
@@ -163,6 +168,7 @@ impl Watcher {
             subscribed: HashSet::new(),
             status: Store::open(),
             emitted: Snapshot::default(),
+            emits_log: emits_log(),
         };
         // Before the first rescan, so its sweep runs against statuses that were read: a pane
         // that died while Oko was closed is cleaned up here, where no hook ever ran for it.
@@ -269,6 +275,7 @@ impl Watcher {
             return true;
         }
         self.emitted = snapshot.clone();
+        log_emit(self.emits_log.as_deref());
         emit(Event::Snapshot(snapshot))
     }
 
@@ -550,6 +557,45 @@ fn last_component(path: Option<&str>) -> Option<String> {
     }
 }
 
+/// `~/.oko/emits.log`, or `None` unless `OKO_DEBUG_EMITS` is set.
+fn emits_log() -> Option<PathBuf> {
+    std::env::var_os("OKO_DEBUG_EMITS")?;
+    crate::status::oko_dir().ok().map(|dir| dir.join("emits.log"))
+}
+
+/// One line per emission, for the check that Oko stays quiet.
+///
+/// §2.11's quietness is the one property a human watching the screen cannot verify — a
+/// redundant redraw of identical content is invisible — so it is counted rather than
+/// watched. **A log rather than a total reported on exit**, because the check needs two
+/// readings sixty seconds apart *from one running process*: two runs would compare two
+/// counters both starting at zero. Exit is no place to report from either, since
+/// `src/main.rs:run` never joins this thread, and the alternate screen rules out `eprintln!`.
+/// A file the running process appends to is readable with `wc -l` from another tab without
+/// stopping anything.
+///
+/// **The line carries a timestamp and no row content.** Logging *what* was emitted is the
+/// natural debugging instinct and row names are the interesting part — which would break the
+/// gate check that greps `~/.oko/` for a name it expects to find nowhere on disk.
+///
+/// It cannot perturb what it measures: it changes no `Snapshot` field and does not touch
+/// `~/.oko/status/`, whose mtime is what `src/status.rs:Store::refresh` gates on.
+fn log_emit(path: Option<&Path>) {
+    let Some(path) = path else {
+        return;
+    };
+    let Some(dir) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let now = OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default();
+        let _ = writeln!(file, "{now}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,5 +629,31 @@ mod tests {
         assert_eq!(resolve(&row(None, "/Users/me/dev/main")).as_deref(), Some("main"));
         // ...and does not move a name a human set.
         assert_eq!(resolve(&row(Some("api work"), "/anywhere")).as_deref(), Some("api work"));
+    }
+
+    #[test]
+    fn an_emission_logs_one_line_and_no_row_content() {
+        let dir = std::env::temp_dir().join("oko-emits-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("emits.log");
+
+        log_emit(Some(&path));
+        log_emit(Some(&path));
+        let text = std::fs::read_to_string(&path).unwrap();
+
+        // Two emissions, two lines — `wc -l` is the whole of the check.
+        assert_eq!(text.lines().count(), 2);
+        // A timestamp and nothing else. The gate greps `~/.oko/` for a row name it expects
+        // to find nowhere, so logging *what* was emitted would break it against a correct
+        // build — and row names are exactly the debugging instinct that would put them here.
+        for line in text.lines() {
+            OffsetDateTime::parse(line, &Rfc3339).expect("a bare RFC-3339 timestamp");
+        }
+
+        // Unset, and nothing is written at all.
+        let quiet = dir.join("never.log");
+        log_emit(None);
+        assert!(!quiet.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
