@@ -47,10 +47,80 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some("watch") => watch(),
+        Some("var") => var_spike(),
         Some(other) => {
-            bail!("unknown command {other:?}; expected `activate <session-id>` or `watch`")
+            bail!(
+                "unknown command {other:?}; expected `activate <session-id>`, `watch` or `var`"
+            )
         }
     }
+}
+
+/// OQ-5's spike: can Oko set, read back and *watch* a `user.` variable on a session that is
+/// not its own?
+///
+/// §2.10 stores a row's name in `user.okoName`, and nothing in this repo has ever written a
+/// variable — Phase 1 only ever read, and only from its own window. Three things have to
+/// hold and they are measured separately, because they fail for different reasons.
+fn var_spike() -> Result<()> {
+    const KEY: &str = "user.okoSpike";
+
+    let mut client = connect()?;
+    let list = client.list_sessions()?;
+    let placed = flatten(&list);
+    let own = resolve_own_session(&mut client, &list)?;
+
+    // Deliberately not our own session: writing to a pane we occupy would prove the weaker
+    // claim, and §2.10 needs the stronger one.
+    let target = placed
+        .iter()
+        .find(|p| p.session_id != own)
+        .ok_or_else(|| anyhow!("need a second session in some window to write to"))?;
+    println!("own      {own}");
+    println!("target   {}  (a session this process does not occupy)", target.session_id);
+    println!();
+
+    // 1. Set.
+    let written = "phase-4 spike";
+    client.set_variable(&target.session_id, KEY, &format!("{written:?}"))?;
+    println!("1. set          {KEY} = {written:?}  → OK");
+
+    // 2. Read back.
+    let got = client.variables(&target.session_id, &[KEY])?.get(KEY).cloned();
+    println!("2. read back    {got:?}");
+    if got.as_deref() != Some(written) {
+        bail!("read-back mismatch: expected {written:?}, got {got:?}");
+    }
+
+    // 3. Watch. Subscribe, then change it, and see whether a notification arrives.
+    client.watch_variable(&target.session_id, KEY)?;
+    client.set_read_timeout(std::time::Duration::from_millis(200))?;
+    client.set_variable(&target.session_id, KEY, "\"changed\"")?;
+
+    let deadline = Instant::now() + std::time::Duration::from_secs(3);
+    let mut seen = None;
+    while Instant::now() < deadline && seen.is_none() {
+        if let Some(n) = client.next_notification()?
+            && let Some(v) = n.variable_changed_notification
+            && v.name.as_deref() == Some(KEY)
+        {
+            seen = Some(format!("{:?} on {:?}", v.json_new_value, v.identifier));
+        }
+    }
+    match &seen {
+        Some(what) => println!("3. watch        notification arrived: {what}"),
+        None => println!("3. watch        NO notification within 3s"),
+    }
+
+    // Leave nothing behind: null unsets.
+    client.set_variable(&target.session_id, KEY, "null")?;
+    let after = client.variables(&target.session_id, &[KEY])?.get(KEY).cloned();
+    println!("4. unset (null) reads back as {after:?}  (None = gone)");
+
+    // Set and read-back are assertions above — reaching here means they held.
+    println!();
+    println!("OQ-5: set=yes read=yes watch={}", if seen.is_some() { "yes" } else { "NO" });
+    Ok(())
 }
 
 fn connect() -> Result<Client> {

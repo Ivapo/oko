@@ -298,6 +298,31 @@ impl Client {
         Ok(vars)
     }
 
+    /// Sets one session-scope variable.
+    ///
+    /// **The name must begin with `user.`** — iTerm2 answers `INVALID_NAME` otherwise, which
+    /// is the whole reason Oko's own keys are spelled that way. The value is JSON-encoded,
+    /// the same encoding [`variables`](Self::variables) decodes on the way back, and `null`
+    /// unsets it.
+    pub fn set_variable(&mut self, session_id: &str, name: &str, value: &str) -> Result<()> {
+        let resp = self.call(Req::VariableRequest(VariableRequest {
+            scope: Some(api::variable_request::Scope::SessionId(session_id.to_string())),
+            set: vec![api::variable_request::Set {
+                name: Some(name.to_string()),
+                value: Some(value.to_string()),
+            }],
+            get: vec![],
+        }))?;
+        let Resp::VariableResponse(r) = resp else {
+            bail!("expected a variable response, got {resp:?}");
+        };
+        match api::variable_response::Status::try_from(r.status.unwrap_or_default()) {
+            Ok(api::variable_response::Status::Ok) => Ok(()),
+            Ok(status) => bail!("setting {name} on {session_id} failed: {status:?}"),
+            Err(_) => bail!("setting {name} returned an unknown status: {:?}", r.status),
+        }
+    }
+
     pub fn activate(&mut self, session_id: &str) -> Result<()> {
         let resp = self.call(Req::ActivateRequest(ActivateRequest {
             identifier: Some(api::activate_request::Identifier::SessionId(session_id.to_string())),
