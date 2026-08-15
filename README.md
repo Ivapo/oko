@@ -36,6 +36,10 @@ fires no hook at all, so the last thing Oko heard was `working`. After
 never go stale — an agent that has been waiting twenty minutes is exactly the thing you
 want to see, and `ready` is legitimately hours old.
 
+**Requirements:** macOS, [iTerm2](https://iterm2.com) 3.6 or later, and a Rust toolchain to
+build. The status column additionally needs [Claude
+Code](https://claude.com/claude-code) — everything else works without it.
+
 ## Setup — once per machine
 
 Oko talks to iTerm2's scripting API, which ships disabled:
@@ -124,3 +128,30 @@ what `◌ stale` is for.
 
 `probe watch` subscribes to more than the dashboard does, so when something does not update
 it tells you whether iTerm2 sent an event at all.
+
+## How this repo is organised
+
+Oko was built spec-first, and the documents are part of the repo rather than an afterthought:
+
+- **[`specs/`](specs/)** — *why* each decision was made, and the plan. Append-only once
+  accepted, so a wrong turn stays visible with the correction beside it.
+  [`specs/reviews/oko-001.md`](specs/reviews/oko-001.md) is the review record: nine rounds
+  across three phases, every blocking finding and what it cost.
+- **[`rules/`](rules/)** — *what is true right now*, tracking the code and corrected against
+  it. [`iterm-api.md`](rules/iterm-api.md) is the one worth reading if you want to talk to
+  iTerm2 yourself: the endpoint, the authorization dance, the join key, and the measured
+  latencies. [`claude-status.md`](rules/claude-status.md) has the full hook vocabulary and
+  the cases nothing reports.
+
+`CLAUDE.md` describes the workflow; it points at a methodology that lives outside this repo,
+so those paths will not resolve for you.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+
+One exception: **[`proto/api.proto`](proto/api.proto) is vendored verbatim from
+[gnachman/iTerm2](https://github.com/gnachman/iTerm2)** (commit `f4ca0004`), which is
+GPL-2.0. It is included as the interface definition for iTerm2's scripting API — the wire
+format a client has to speak — and pinned by commit and hash so a schema change shows up as
+a diff. See [`proto/NOTICE.md`](proto/NOTICE.md) before redistributing.

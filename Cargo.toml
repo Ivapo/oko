@@ -2,6 +2,15 @@
 name = "oko"
 version = "0.1.0"
 edition = "2024"
+description = "\"The eye\" — a live dashboard tab inside iTerm2 showing what every other tab in the window is doing, with Enter to jump to one."
+repository = "https://github.com/Ivapo/oko"
+license = "MIT"
+readme = "README.md"
+keywords = ["iterm2", "tui", "dashboard", "claude-code", "ratatui"]
+categories = ["command-line-utilities"]
+# `license` covers Oko's own source. `proto/api.proto` is vendored from iTerm2 and is
+# GPL-2.0 — see proto/NOTICE.md. It cannot be dropped: build.rs compiles it, and it is the
+# wire format a client must speak. Read that notice before publishing this anywhere.
 
 [dependencies]
 anyhow = "1"
