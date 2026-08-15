@@ -28,10 +28,24 @@ use super::api::{
     ListSessionsResponse, Notification, NotificationType, SessionSummary, SplitTreeNode,
 };
 use super::client::{Client, decode_json_value};
-use crate::status::{Status, Store};
+use crate::status::{Shown, Store};
 
-/// The two variables a plain row is made of (§2.2).
-const ROW_VARS: [&str; 2] = ["path", "jobName"];
+/// The variables a row is made of: the two §2.2 names, and the name §2.10 stores.
+///
+/// One array, because it drives three things that must not drift apart — what `rescan`
+/// fetches for a session it has not seen, what it subscribes that session to, and what
+/// [`row_variables`] hands a caller. `user.okoName` must be spelled with that prefix:
+/// iTerm2 answers `INVALID_NAME` for a `user.`-less name a client tries to set.
+const ROW_VARS: [&str; 3] = ["path", "jobName", OKO_NAME];
+
+/// Where a row's name lives — a variable on the iTerm2 session itself (§2.10).
+///
+/// A session variable rather than a file, and the reason is that Phase 3 already paid for
+/// the lesson: a file keyed by session id needs its own sweep, its own answer to "what if
+/// the pane is gone", and its own concurrent-write discipline. This needs none of them. It
+/// dies with the pane, iTerm2 owns the concurrency, and two Oko instances see one value
+/// with no sync protocol at all.
+pub const OKO_NAME: &str = "user.okoName";
 
 /// How long the watcher waits for a notification before looking at its command channel.
 /// Not a poll of iTerm2 — nothing is asked for; it is how fast a keystroke is served.
@@ -49,14 +63,34 @@ pub struct Row {
     /// literal `claude` instead** (OQ-2) — that is `src/ui.rs`'s doing, not this field's.
     pub process: Option<String>,
     pub path: Option<String>,
-    /// What Claude Code last said about this session, if it is a Claude tab at all.
+    /// The row's stored name: `user.okoName`, or `None` when nobody has named it.
+    ///
+    /// A variable like `path` and `jobName`, held here and patched by the same notification
+    /// path. **An explicit rename is stored and is then the name**, through any subsequent
+    /// `cd`: at that point a human has said what this row *is*, which a directory change
+    /// does not invalidate.
+    pub stored_name: Option<String>,
+    /// What the `name` column draws: [`stored_name`], else the last component of [`path`].
+    ///
+    /// **Filled at snapshot time only**, like [`status`] and for a sharper reason: the
+    /// derived default is *not* a name, it is a description of where the row currently is,
+    /// so it has to be recomputed as the row moves. Storing it at first sight would freeze
+    /// it to whatever directory the pane happened to be in when Oko started, which is the
+    /// wrong answer for a shell a human navigates.
+    ///
+    /// [`stored_name`]: Row::stored_name
+    /// [`path`]: Row::path
+    /// [`status`]: Row::status
+    pub name: Option<String>,
+    /// What Claude Code last said about this session and how long ago, if it is a Claude tab
+    /// at all.
     ///
     /// **Filled at snapshot time only.** The watcher's own rows always carry `None` here:
     /// shape and variables come from iTerm2 and status comes from a directory of files, and
     /// keeping them apart until the last moment is what lets one comparison of the merged
-    /// view speak for all three — including a `working` going stale, which no notification
-    /// and no file write ever announces.
-    pub status: Option<Status>,
+    /// view speak for all three — including a `working` going stale or an age crossing a
+    /// bucket boundary, neither of which any notification or file write ever announces.
+    pub status: Option<Shown>,
 }
 
 /// Everything the table shows, at one moment.
@@ -74,9 +108,15 @@ pub enum Event {
 }
 
 /// What the UI asks the socket thread for.
+///
+/// Both variants exist because the UI cannot reach iTerm2 itself: `src/main.rs:run` moves
+/// the `Watcher`, and with it the only `Client`, into the socket thread.
 #[derive(Clone, Debug)]
 pub enum Cmd {
     Activate(String),
+    /// Set a session's name, or clear it with `None` — which is the only way back to the
+    /// derived default.
+    Rename(String, Option<String>),
 }
 
 /// A session and where it sits: which window, and which tab of it.
@@ -135,13 +175,17 @@ impl Watcher {
     }
 
     /// The rows as the table should draw them: shape and variables from `self.rows`, status
-    /// merged in from the hooks. The one place the two meet.
+    /// merged in from the hooks, and the name resolved. The one place the three meet.
     pub fn snapshot(&self) -> Snapshot {
         let now = OffsetDateTime::now_utc();
         let rows = self
             .rows
             .iter()
-            .map(|row| Row { status: self.status.status_of(&row.session_id, now), ..row.clone() })
+            .map(|row| Row {
+                name: row.stored_name.clone().or_else(|| last_component(row.path.as_deref())),
+                status: self.status.status_of(&row.session_id, now),
+                ..row.clone()
+            })
             .collect();
         Snapshot { window_number: self.window_number, rows }
     }
@@ -169,6 +213,13 @@ impl Watcher {
                     Ok(Cmd::Activate(id)) => {
                         if let Err(e) = self.client.activate(&id)
                             && !emit(Event::Error(format!("jump failed: {e:#}")))
+                        {
+                            return;
+                        }
+                    }
+                    Ok(Cmd::Rename(id, name)) => {
+                        if let Err(e) = self.rename(&id, name)
+                            && !emit(Event::Error(format!("rename failed: {e:#}")))
                         {
                             return;
                         }
@@ -221,6 +272,29 @@ impl Watcher {
         emit(Event::Snapshot(snapshot))
     }
 
+    /// Sets a row's name on the session itself, or clears it.
+    ///
+    /// The watcher's own row is updated here rather than in the UI, and that is not a
+    /// preference: the UI's snapshot is a copy, so a name written into it would show for one
+    /// frame and vanish at the next emission — which looks like a flaky rename rather than
+    /// the misplaced write it is. The subscription in `rescan` would eventually deliver the
+    /// same value, but waiting for the round trip is a visible stutter.
+    fn rename(&mut self, session_id: &str, name: Option<String>) -> Result<()> {
+        // JSON, because that is what the API speaks in both directions, and `null` is what
+        // unsets — measured (OQ-5) to read back *absent* rather than as an empty string.
+        // `""` would decode through `decode_json_value` as `Some("")` and render a blank
+        // name no further rename could escape.
+        let value = match &name {
+            Some(name) => serde_json::Value::String(name.clone()).to_string(),
+            None => "null".to_string(),
+        };
+        self.client.set_variable(session_id, OKO_NAME, &value)?;
+        if let Some(row) = self.rows.iter_mut().find(|r| r.session_id == session_id) {
+            row.stored_name = name;
+        }
+        Ok(())
+    }
+
     /// Folds one notification into the rows.
     ///
     /// Whether anything the table shows actually moved is not decided here — that is
@@ -239,6 +313,9 @@ impl Watcher {
             match name.as_str() {
                 "path" => row.path = value,
                 "jobName" => row.process = value,
+                // Which is how a rename made in *another* Oko instance arrives here: one
+                // value on the session, seen by every client watching it, no sync protocol.
+                OKO_NAME => row.stored_name = value,
                 _ => {}
             }
             return Ok(());
@@ -279,20 +356,28 @@ impl Watcher {
                 .rows
                 .iter()
                 .find(|r| r.session_id == p.session_id)
-                .map(|r| (r.process.clone(), r.path.clone()));
-            let (process, path) = match known {
+                .map(|r| (r.process.clone(), r.path.clone(), r.stored_name.clone()));
+            let (process, path, stored_name) = match known {
                 Some(values) => values,
                 None => {
                     let vars = self.client.variables(&p.session_id, &ROW_VARS)?;
-                    (vars.get("jobName").cloned(), vars.get("path").cloned())
+                    (
+                        vars.get("jobName").cloned(),
+                        vars.get("path").cloned(),
+                        vars.get(OKO_NAME).cloned(),
+                    )
                 }
             };
-            // `status: None` always: it is merged in by `snapshot`, never held here.
+            // `name` and `status` are `None` always: both are merged in by `snapshot` and
+            // neither is ever held here. For the name that is what keeps the derived default
+            // derived — a stored one would stop following a `cd`.
             rows.push(Row {
                 session_id: p.session_id.clone(),
                 tab: p.tab,
                 process,
                 path,
+                stored_name,
+                name: None,
                 status: None,
             });
         }
@@ -449,4 +534,54 @@ pub fn flatten(list: &ListSessionsResponse) -> Vec<Placed> {
 /// The variables a row is built from, for callers that want to read them directly.
 pub fn row_variables(client: &mut Client, session_id: &str) -> Result<HashMap<String, String>> {
     client.variables(session_id, &ROW_VARS)
+}
+
+/// The last component of a path — the derived default a row shows until it is named (§2.10).
+///
+/// Computed here rather than stored, so it follows a `cd`: it is not a name, it is a
+/// description of where the row currently is.
+fn last_component(path: Option<&str>) -> Option<String> {
+    let path = path?;
+    match path.rsplit('/').find(|part| !part.is_empty()) {
+        Some(name) => Some(name.to_string()),
+        // The root, which has no last component but is somewhere all the same.
+        None if path.starts_with('/') => Some("/".to_string()),
+        None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_derived_default_is_the_last_component() {
+        assert_eq!(last_component(Some("/Users/me/dev/main/oko")).as_deref(), Some("oko"));
+        // A trailing slash is still that directory, not an empty name.
+        assert_eq!(last_component(Some("/Users/me/dev/main/")).as_deref(), Some("main"));
+        assert_eq!(last_component(Some("/")).as_deref(), Some("/"));
+        // No path at all: the row falls through to the `-` every other column uses.
+        assert_eq!(last_component(None), None);
+    }
+
+    #[test]
+    fn a_stored_name_wins_over_the_derived_one() {
+        let row = |stored: Option<&str>, path: &str| Row {
+            session_id: "S".to_string(),
+            tab: 1,
+            process: None,
+            path: Some(path.to_string()),
+            stored_name: stored.map(str::to_owned),
+            name: None,
+            status: None,
+        };
+        // What `snapshot` computes, as the expression it computes.
+        let resolve = |r: &Row| r.stored_name.clone().or_else(|| last_component(r.path.as_deref()));
+
+        assert_eq!(resolve(&row(None, "/Users/me/dev/main/oko")).as_deref(), Some("oko"));
+        // A `cd` moves the derived default...
+        assert_eq!(resolve(&row(None, "/Users/me/dev/main")).as_deref(), Some("main"));
+        // ...and does not move a name a human set.
+        assert_eq!(resolve(&row(Some("api work"), "/anywhere")).as_deref(), Some("api work"));
+    }
 }

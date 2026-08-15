@@ -53,11 +53,12 @@ fn run() -> Result<()> {
         string(&event, "hook_event_name").context("the hook event carries no hook_event_name")?;
 
     match action(hook_event_name, &event) {
-        Some(Action::Write(status)) => write(&Entry {
+        Some(Action::Write(status, tool)) => write(&Entry {
             iterm_session_id,
             claude_session_id,
             status,
             at: OffsetDateTime::now_utc(),
+            tool,
         }),
         Some(Action::Delete) => remove_if_owned(&iterm_session_id, &claude_session_id),
         // An event we do not register for, or one whose matcher let through something we do
@@ -67,8 +68,12 @@ fn run() -> Result<()> {
 }
 
 /// What one hook firing does to the status file.
+///
+/// `Write` carries the tool in flight as well as the status, because [`write`] builds a
+/// whole `Entry` and renames it over the file — there is no "leave that field alone", so
+/// every event that writes has to decide it (§2.12).
 enum Action {
-    Write(Status),
+    Write(Status, Option<String>),
     Delete,
 }
 
@@ -77,22 +82,35 @@ enum Action {
 /// The matchers in [`settings_block`] already narrow most of these; the checks here are the
 /// second line of defence, and the `Notification` split cannot be done by matcher at all —
 /// its two rows write opposite statuses, so only `notification_type` tells them apart.
+///
+/// **The tool in flight is one rule over that whole table: `PreToolUse` sets it, every other
+/// event clears it** (§2.12). Enumerating ten answers would leave the eleventh event to a
+/// guess; this way the rule is total by construction and stays total when a row is added.
 fn action(hook_event_name: &str, event: &serde_json::Value) -> Option<Action> {
+    // Every arm below writes no tool. The one that does is spelled out on its own.
+    let idle = |status| Some(Action::Write(status, None));
+
     match hook_event_name {
         // `compact` fires on auto-compaction *mid-turn*: registered bare it would tell a
         // human "this agent is done, go prompt it" while it works. `fork` is excluded as
         // ambiguous rather than wrong — the next real event corrects it either way.
         "SessionStart" => match string(event, "source")? {
-            "startup" | "resume" | "clear" => Some(Action::Write(Status::Ready)),
+            "startup" | "resume" | "clear" => idle(Status::Ready),
             _ => None,
         },
 
-        // A tool ran, or a prompt was submitted, or auto mode denied a call and the agent
-        // runs on. `PreToolUse` is also what bounds the deny path: nothing fires when a
-        // *human* answers no, so the next tool call is what clears a stale `waiting`.
-        "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PermissionDenied" => {
-            Some(Action::Write(Status::Working))
+        // The one event that records a tool: it starts one, and nothing has finished it.
+        // A `working` carrying a tool ages against `OKO_TOOL_STALE_AFTER` instead, so a
+        // quiet fifteen-minute build reports `working` rather than `stale`.
+        "PreToolUse" => {
+            Some(Action::Write(Status::Working, string(event, "tool_name").map(str::to_owned)))
         }
+
+        // A tool finished, or a prompt was submitted, or auto mode denied a call and the
+        // agent runs on. `PreToolUse` above is also what bounds the deny path: nothing fires
+        // when a *human* answers no, so the next tool call is what clears a stale `waiting`.
+        // `PostToolUse` is what clears the tool, which is the whole of "not in flight".
+        "UserPromptSubmit" | "PostToolUse" | "PermissionDenied" => idle(Status::Working),
 
         // Nine notification types exist and only these six mean anything to a row.
         // `idle_prompt` is the one that must never reach `waiting`: it fires about a minute
@@ -102,15 +120,15 @@ fn action(hook_event_name: &str, event: &serde_json::Value) -> Option<Action> {
             "permission_prompt"
             | "agent_needs_input"
             | "elicitation_dialog"
-            | "elicitation_url_dialog" => Some(Action::Write(Status::Waiting)),
-            "elicitation_complete" | "elicitation_response" => Some(Action::Write(Status::Working)),
+            | "elicitation_url_dialog" => idle(Status::Waiting),
+            "elicitation_complete" | "elicitation_response" => idle(Status::Working),
             _ => None,
         },
 
         // The turn is over, however it ended. `Stop` does not fire on a user interrupt and
         // an API error fires `StopFailure` instead — the interrupt is the hole OQ-4 (c)'s
         // staleness rule exists for, not something an eleventh registration fixes.
-        "Stop" | "StopFailure" => Some(Action::Write(Status::Ready)),
+        "Stop" | "StopFailure" => idle(Status::Ready),
 
         "SessionEnd" => Some(Action::Delete),
 
@@ -192,21 +210,82 @@ fn log_debug(message: &str) {
     if std::env::var_os("OKO_HOOK_DEBUG").is_none() {
         return;
     }
-    let Ok(dir) = oko::status::status_dir() else {
+    let Ok(dir) = oko::status::oko_dir() else {
         return;
     };
-    let Some(home) = dir.parent() else {
-        return;
-    };
-    if std::fs::create_dir_all(home).is_err() {
+    if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
     if let Ok(mut file) =
-        std::fs::OpenOptions::new().create(true).append(true).open(home.join("hook.log"))
+        std::fs::OpenOptions::new().create(true).append(true).open(dir.join("hook.log"))
     {
         let now = OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default();
         let _ = writeln!(file, "{now} {message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(name: &str, extra: serde_json::Value) -> serde_json::Value {
+        let mut v = serde_json::json!({ "session_id": "c1", "hook_event_name": name });
+        for (k, value) in extra.as_object().unwrap() {
+            v[k] = value.clone();
+        }
+        v
+    }
+
+    fn written(name: &str, extra: serde_json::Value) -> Option<(Status, Option<String>)> {
+        match action(name, &event(name, extra)) {
+            Some(Action::Write(status, tool)) => Some((status, tool)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn only_pre_tool_use_records_a_tool() {
+        assert_eq!(
+            written("PreToolUse", serde_json::json!({ "tool_name": "Bash" })),
+            Some((Status::Working, Some("Bash".to_string())))
+        );
+
+        // §2.12's rule is total over §2.3's table, so this list is that table minus the one
+        // event above and minus `SessionEnd`, which deletes rather than writes.
+        let tool = serde_json::json!({ "tool_name": "Bash" });
+        let notification =
+            |kind: &str| serde_json::json!({ "notification_type": kind.to_string() });
+        let others = [
+            ("SessionStart", serde_json::json!({ "source": "startup" }), Status::Ready),
+            ("UserPromptSubmit", serde_json::json!({}), Status::Working),
+            // These two carry a `tool_name` of their own and must still clear: a tool that
+            // finished, or a call auto mode refused, is exactly "not in flight".
+            ("PostToolUse", tool.clone(), Status::Working),
+            ("PermissionDenied", tool, Status::Working),
+            ("Notification", notification("permission_prompt"), Status::Waiting),
+            ("Notification", notification("elicitation_complete"), Status::Working),
+            ("Stop", serde_json::json!({}), Status::Ready),
+            ("StopFailure", serde_json::json!({}), Status::Ready),
+        ];
+        for (name, extra, status) in others {
+            assert_eq!(written(name, extra), Some((status, None)), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_pre_tool_use_without_a_name_falls_back_to_the_ordinary_clock() {
+        assert_eq!(written("PreToolUse", serde_json::json!({})), Some((Status::Working, None)));
+    }
+
+    #[test]
+    fn idle_prompt_still_writes_nothing() {
+        // The matcher that stops `ready` becoming unreachable, checked here too because
+        // this function is the only filter that can split the two `Notification` rows.
+        let e = event("Notification", serde_json::json!({ "notification_type": "idle_prompt" }));
+        assert!(action("Notification", &e).is_none());
+        let e = event("SessionStart", serde_json::json!({ "source": "compact" }));
+        assert!(action("SessionStart", &e).is_none());
     }
 }

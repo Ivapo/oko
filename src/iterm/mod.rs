@@ -18,6 +18,6 @@ mod watch;
 
 pub use client::{Client, socket_path};
 pub use watch::{
-    Cmd, Event, Placed, Row, Snapshot, Watcher, flatten, own_tty, resolve_own_session,
+    Cmd, Event, OKO_NAME, Placed, Row, Snapshot, Watcher, flatten, own_tty, resolve_own_session,
     row_variables,
 };
