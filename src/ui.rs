@@ -3,9 +3,11 @@
 //! ```text
 //!  Oko — window 0                                        5 rows
 //!  ────────────────────────────────────────────────────────────
-//!    tab  process           where
-//!  ▸ 1    node              ~/dev/main/oko
-//!    2    nvim              ~/dev/main/oko/src
+//!    tab  process           status      where
+//!  ▸ 1    claude            ● waiting   ~/dev/main/oko
+//!    2    claude            ◐ working   ~/dev/main/spec-driven-dev
+//!    3    claude            ◌ stale     ~/dev/main/mdview
+//!    4    nvim                          ~/dev/main/oko/src
 //!  ────────────────────────────────────────────────────────────
 //!  ↵ jump    ↑↓ select    q quit
 //! ```
@@ -13,18 +15,26 @@
 //! **Selection is a session id, not a row number.** Closing a tab above the selection must
 //! not re-point Enter at a neighbour: a wrong jump is the failure §2.7 argues is worse than
 //! no answer at all.
+//!
+//! Row 4 is a plain tab: a process name, a directory, and no status, because nothing reports
+//! one for it. Rows 1–3 are Claude tabs, and they read `claude` because a status file exists
+//! for them (OQ-2) — never because of the job name, which for those rows is some descendant
+//! of `claude` and is not an identity test.
 
 use std::sync::mpsc::{Receiver, Sender};
 
 use anyhow::Result;
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row as TableRow, Table, TableState};
 
 use oko::iterm::{Cmd, Event as ItermEvent, Row, Snapshot};
+use oko::status::Status;
 
 /// Everything the event loop consumes, from either thread.
 pub enum AppEvent {
@@ -81,7 +91,8 @@ impl App {
             .as_deref()
             .is_some_and(|id| self.snapshot.rows.iter().any(|r| r.session_id == id));
         if !still_there {
-            let fallback = previous_index.unwrap_or(0).min(self.snapshot.rows.len().saturating_sub(1));
+            let fallback =
+                previous_index.unwrap_or(0).min(self.snapshot.rows.len().saturating_sub(1));
             self.select_index(fallback);
         }
     }
@@ -191,15 +202,25 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     rule(frame, rule_top);
     rule(frame, rule_bottom);
 
-    let header = TableRow::new(["tab", "process", "where"].map(|h| Cell::from(h).dim()));
+    let header = TableRow::new(["tab", "process", "status", "where"].map(|h| Cell::from(h).dim()));
     let rows: Vec<TableRow> = app.snapshot.rows.iter().map(render_row).collect();
-    let table = Table::new(rows, [Constraint::Length(4), Constraint::Length(17), Constraint::Min(10)])
+    let widths = [
+        Constraint::Length(4),
+        Constraint::Length(17),
+        Constraint::Length(10),
+        Constraint::Min(10),
+    ];
+    let table = Table::new(rows, widths)
         .header(header)
         .column_spacing(2)
         .row_highlight_style(Style::new().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▸ ");
     app.table.select(app.selected_index());
-    frame.render_stateful_widget(table, body.inner(ratatui::layout::Margin::new(1, 0)), &mut app.table);
+    frame.render_stateful_widget(
+        table,
+        body.inner(ratatui::layout::Margin::new(1, 0)),
+        &mut app.table,
+    );
 
     let keys = match &app.status {
         Some(message) => Line::from(format!(" {message}")).style(Style::new().fg(Color::Red)),
@@ -209,11 +230,45 @@ fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 }
 
 fn render_row(row: &Row) -> TableRow<'static> {
+    // **A row carrying a status reads `claude`** (OQ-2). The status file has no name field,
+    // and §2.2's job name is the *deepest* foreground process — `node` here,
+    // `rust-analyzer-pr` there, whatever happened to be deepest when iTerm2 sampled — so it
+    // is a display value and never an identity test.
+    let process = match row.status {
+        Some(_) => "claude".to_string(),
+        None => row.process.clone().unwrap_or_else(|| "-".to_string()),
+    };
     TableRow::new(vec![
         Cell::from(row.tab.to_string()),
-        Cell::from(row.process.clone().unwrap_or_else(|| "-".to_string())),
+        Cell::from(process),
+        render_status(row.status),
         Cell::from(row.path.as_deref().map_or_else(|| "-".to_string(), abbreviate_home)),
     ])
+}
+
+/// The glyph and the word, as §1 draws them. A plain tab gets an empty cell rather than a
+/// dash: it has no status because nothing reports one for it, which is not the same as a
+/// value that failed to arrive.
+fn render_status(status: Option<Status>) -> Cell<'static> {
+    let Some(status) = status else {
+        return Cell::from("");
+    };
+    let colour = match status {
+        Status::Working => Color::Cyan,
+        Status::Waiting => Color::Yellow,
+        Status::Ready => Color::Green,
+        Status::Stale => Color::DarkGray,
+    };
+    Cell::from(Line::from(vec![
+        Span::styled(status.glyph(), Style::new().fg(colour)),
+        Span::raw(" "),
+        // `stale` is the one status that is not a claim about the agent but about Oko's own
+        // knowledge, so it is dimmed rather than stated in the same voice as the other three.
+        match status {
+            Status::Stale => Span::styled(status.word(), Style::new().fg(Color::DarkGray)),
+            _ => Span::raw(status.word()),
+        },
+    ]))
 }
 
 /// `/Users/me/dev` → `~/dev`, as §1's sketch shows it.

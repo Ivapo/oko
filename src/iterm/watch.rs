@@ -10,17 +10,25 @@
 //!   session, terminates none and changes no session variable, so this is the only event
 //!   that makes the `tab` column live — and its payload is a whole `ListSessionsResponse`,
 //!   so the new shape arrives inside the notification.
+//!
+//! The status column has no subscription to hang on, because it comes from a directory of
+//! files rather than from iTerm2. It rides the tick this loop already wakes on: one `stat`
+//! of `~/.oko/status`, a re-read only when the mtime moved, and one comparison of the
+//! merged view — which is also the only thing that can notice a `working` going stale, since
+//! ageing writes no file and fires nothing.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
+use time::OffsetDateTime;
 
 use super::api::{
     ListSessionsResponse, Notification, NotificationType, SessionSummary, SplitTreeNode,
 };
 use super::client::{Client, decode_json_value};
+use crate::status::{Status, Store};
 
 /// The two variables a plain row is made of (§2.2).
 const ROW_VARS: [&str; 2] = ["path", "jobName"];
@@ -37,13 +45,22 @@ pub struct Row {
     /// API offers (§2.8). Two sessions of a split tab share it.
     pub tab: usize,
     /// `jobName`, as the API reports it: iTerm2 truncates it to 16 bytes and Oko displays
-    /// what it is given rather than repairing it.
+    /// what it is given rather than repairing it. **A row carrying a status shows the
+    /// literal `claude` instead** (OQ-2) — that is `src/ui.rs`'s doing, not this field's.
     pub process: Option<String>,
     pub path: Option<String>,
+    /// What Claude Code last said about this session, if it is a Claude tab at all.
+    ///
+    /// **Filled at snapshot time only.** The watcher's own rows always carry `None` here:
+    /// shape and variables come from iTerm2 and status comes from a directory of files, and
+    /// keeping them apart until the last moment is what lets one comparison of the merged
+    /// view speak for all three — including a `working` going stale, which no notification
+    /// and no file write ever announces.
+    pub status: Option<Status>,
 }
 
 /// Everything the table shows, at one moment.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub window_number: Option<i32>,
     pub rows: Vec<Row>,
@@ -76,11 +93,16 @@ pub struct Watcher {
     own_session: String,
     window_id: String,
     window_number: Option<i32>,
+    /// Shape and variables. Never carries a status — see [`Row::status`].
     rows: Vec<Row>,
     /// Which (session, variable) pairs are already subscribed. A session that leaves this
     /// window and comes back is still subscribed — resubscribing it would be a second
     /// notification for every change.
     subscribed: HashSet<(String, &'static str)>,
+    /// What the hooks have written, and the mtime that says whether to look again.
+    status: Store,
+    /// The last snapshot handed to the UI, so nothing is sent twice.
+    emitted: Snapshot,
 }
 
 impl Watcher {
@@ -99,15 +121,29 @@ impl Watcher {
             window_number: None,
             rows: Vec::new(),
             subscribed: HashSet::new(),
+            status: Store::open(),
+            emitted: Snapshot::default(),
         };
+        // Before the first rescan, so its sweep runs against statuses that were read: a pane
+        // that died while Oko was closed is cleaned up here, where no hook ever ran for it.
+        watcher.status.refresh();
         watcher.rescan(&list)?;
         watcher.client.subscribe(NotificationType::NotifyOnLayoutChange, None)?;
         watcher.client.set_read_timeout(IDLE_TICK)?;
+        watcher.emitted = watcher.snapshot();
         Ok(watcher)
     }
 
+    /// The rows as the table should draw them: shape and variables from `self.rows`, status
+    /// merged in from the hooks. The one place the two meet.
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { window_number: self.window_number, rows: self.rows.clone() }
+        let now = OffsetDateTime::now_utc();
+        let rows = self
+            .rows
+            .iter()
+            .map(|row| Row { status: self.status.status_of(&row.session_id, now), ..row.clone() })
+            .collect();
+        Snapshot { window_number: self.window_number, rows }
     }
 
     pub fn own_session(&self) -> &str {
@@ -143,73 +179,94 @@ impl Watcher {
                 }
             }
 
+            // The status directory, on the same tick. One `stat`, and a re-read only when
+            // the mtime moved — **not** the polling OQ-3 ruled out, which is about iTerm2's
+            // API and still pushes.
+            self.status.refresh();
+
             match self.client.next_notification() {
-                Ok(Some(n)) => match self.apply(&n) {
-                    Ok(true) => {
-                        if !emit(Event::Snapshot(self.snapshot())) {
-                            return;
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(e) => {
+                Ok(Some(n)) => {
+                    if let Err(e) = self.apply(&n) {
                         emit(Event::Error(format!("{e:#}")));
                         return;
                     }
-                },
+                }
                 Ok(None) => {}
                 Err(e) => {
                     emit(Event::Error(format!("connection lost: {e:#}")));
                     return;
                 }
             }
+
+            if !self.emit_if_changed(&mut emit) {
+                return;
+            }
         }
     }
 
-    /// Folds one notification into the rows. `Ok(true)` when something the table shows
-    /// changed.
-    fn apply(&mut self, n: &Notification) -> Result<bool> {
+    /// The single emission point: builds the merged view and sends it only when it differs
+    /// from the last one sent. Returns false when the consumer is gone.
+    ///
+    /// One comparison rather than one per source, because the sources disagree about what
+    /// "changed" means. A variable change and a layout change each know they moved
+    /// something; **a `working` crossing `OKO_STALE_AFTER` knows nothing at all** — no file
+    /// is written and no notification fires, only the clock moves. Comparing the merged view
+    /// on every tick is the only thing that catches all three.
+    fn emit_if_changed(&mut self, emit: &mut impl FnMut(Event) -> bool) -> bool {
+        let snapshot = self.snapshot();
+        if snapshot == self.emitted {
+            return true;
+        }
+        self.emitted = snapshot.clone();
+        emit(Event::Snapshot(snapshot))
+    }
+
+    /// Folds one notification into the rows.
+    ///
+    /// Whether anything the table shows actually moved is not decided here — that is
+    /// [`emit_if_changed`](Self::emit_if_changed)'s single comparison, which sees status and
+    /// staleness as well as shape.
+    fn apply(&mut self, n: &Notification) -> Result<()> {
         if let Some(v) = &n.variable_changed_notification {
             let (Some(id), Some(name)) = (&v.identifier, &v.name) else {
-                return Ok(false);
+                return Ok(());
             };
             let value = v.json_new_value.as_deref().and_then(decode_json_value);
             let Some(row) = self.rows.iter_mut().find(|r| &r.session_id == id) else {
                 // A session of another window, or one that has already left ours.
-                return Ok(false);
+                return Ok(());
             };
-            let field = match name.as_str() {
-                "path" => &mut row.path,
-                "jobName" => &mut row.process,
-                _ => return Ok(false),
-            };
-            if *field == value {
-                return Ok(false);
+            match name.as_str() {
+                "path" => row.path = value,
+                "jobName" => row.process = value,
+                _ => {}
             }
-            *field = value;
-            return Ok(true);
+            return Ok(());
         }
 
-        if let Some(layout) = &n.layout_changed_notification {
-            let Some(list) = &layout.list_sessions_response else {
-                return Ok(false);
-            };
-            return self.rescan(list);
+        if let Some(layout) = &n.layout_changed_notification
+            && let Some(list) = &layout.list_sessions_response
+        {
+            self.rescan(list)?;
         }
 
-        Ok(false)
+        Ok(())
     }
 
-    /// Rebuilds the rows from a session list. Returns whether they changed.
+    /// Rebuilds the rows from a session list, and sweeps the status files of sessions that
+    /// no longer exist.
     ///
     /// The window is resolved *every time*, as the one containing our own session, so
     /// dragging Oko's own tab into another window re-scopes the table rather than freezing
     /// it on a window we have left.
-    fn rescan(&mut self, list: &ListSessionsResponse) -> Result<bool> {
+    fn rescan(&mut self, list: &ListSessionsResponse) -> Result<()> {
         let placed = flatten(list);
+        self.sweep_status(list, &placed);
+
         let Some(me) = placed.iter().find(|p| p.session_id == self.own_session) else {
             // Our own session is not in the list: it is closing, or iTerm2 sent a shape we
             // are not in. Keep the last rows rather than blanking the table.
-            return Ok(false);
+            return Ok(());
         };
         self.window_id = me.window_id.clone();
         self.window_number = me.window_number;
@@ -230,7 +287,14 @@ impl Watcher {
                     (vars.get("jobName").cloned(), vars.get("path").cloned())
                 }
             };
-            rows.push(Row { session_id: p.session_id.clone(), tab: p.tab, process, path });
+            // `status: None` always: it is merged in by `snapshot`, never held here.
+            rows.push(Row {
+                session_id: p.session_id.clone(),
+                tab: p.tab,
+                process,
+                path,
+                status: None,
+            });
         }
 
         for row in &rows {
@@ -241,9 +305,29 @@ impl Watcher {
             }
         }
 
-        let changed = rows != self.rows;
         self.rows = rows;
-        Ok(changed)
+        Ok(())
+    }
+
+    /// Deletes the status file of any session iTerm2 no longer has (OQ-4 (b)).
+    ///
+    /// Two things about the scope are load-bearing. It is **every window of the whole
+    /// response**, not Oko's rows: rows are window-scoped, so sweeping against them would
+    /// destroy the live status of Claude tabs in other windows, and two Okos in two windows
+    /// would delete each other's files continuously. And **buried sessions count as alive**
+    /// — they sit outside `windows[]`, so [`flatten`] drops them deliberately, and "in no
+    /// window" is true of a buried but perfectly healthy Claude session.
+    ///
+    /// It runs here rather than on the status tick because a closing tab writes no file, so
+    /// an mtime-gated tick would never fire it; a layout change is exactly the event that
+    /// says a session went away, and it carries the whole session list with it.
+    fn sweep_status(&mut self, list: &ListSessionsResponse, placed: &[Placed]) {
+        let live: HashSet<&str> = placed
+            .iter()
+            .map(|p| p.session_id.as_str())
+            .chain(list.buried_sessions.iter().filter_map(|s| s.unique_identifier.as_deref()))
+            .collect();
+        self.status.sweep(&live);
     }
 }
 
@@ -257,7 +341,8 @@ pub fn resolve_own_session(client: &mut Client, list: &ListSessionsResponse) -> 
     let term_session_id =
         std::env::var("TERM_SESSION_ID").or_else(|_| std::env::var("ITERM_SESSION_ID")).ok();
     // Observed shape: `w0t2p0:F79BC39C-…` — a window/tab/pane triple, a colon, then a UUID.
-    let uuid = term_session_id.as_deref().and_then(|s| s.split_once(':')).map(|(_, u)| u.to_string());
+    let uuid =
+        term_session_id.as_deref().and_then(|s| s.split_once(':')).map(|(_, u)| u.to_string());
     let placed = flatten(list);
 
     // 1. The UUID against `ListSessions`' `unique_identifier`, which is the same string as
