@@ -1,0 +1,15 @@
+[package]
+name = "oko"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+prost = "0.14"
+serde_json = "1"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[build-dependencies]
+prost-build = "0.14"
+protox = "0.9"
