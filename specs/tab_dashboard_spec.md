@@ -5,7 +5,7 @@ note: >
   The iTerm2 dashboard tab — live per-tab directory, process and Claude Code status for
   every tab in the window, with Enter to jump to the selected one.
 status: accepted
-last_updated: 2026-08-14
+last_updated: 2026-08-15
 
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
@@ -15,7 +15,7 @@ phases:
     by: null
   - name: "Phase 2 — live tab table with Enter-to-jump"
     reviewed: 2026-08-14
-    shipped: null
+    shipped: 2026-08-15
     cut: null
     by: null
   - name: "Phase 3 — Claude Code status from hooks"

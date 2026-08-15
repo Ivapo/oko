@@ -2,5 +2,7 @@
 
 # Rules
 
-- **[iterm-api](iterm-api.md)** — generated 2026-08-14 · 2 sources · 84/85 lines
+- **[dashboard-ui](dashboard-ui.md)** — generated 2026-08-15 · 3 sources · 51/55 lines
+  the dashboard Oko draws — its columns and where each value comes from, the keys it answers to, how a selection survives a changing row set, and the path by which rows track the window without polling
+- **[iterm-api](iterm-api.md)** — generated 2026-08-15 · 3 sources · 93/95 lines
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables, operations and subscriptions Oko uses
