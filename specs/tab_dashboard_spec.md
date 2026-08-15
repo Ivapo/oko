@@ -19,7 +19,7 @@ phases:
     cut: null
     by: null
   - name: "Phase 3 — Claude Code status from hooks"
-    reviewed: null
+    reviewed: 2026-08-15
     shipped: null
     cut: null
     by: null
@@ -156,14 +156,69 @@ A directory and a process name do not distinguish an agent that is thinking from
 has been waiting twenty minutes for a permission answer. That distinction is the product,
 and it has to come from Claude Code itself.
 
-Claude Code runs a **hook** — a command of our choosing — on named events. Three carry
-the whole status vocabulary:
+Claude Code runs a **hook** — a command of our choosing — on named events. Ten registrations
+carry the status vocabulary, and the shape of the table is *not* three events for three
+statuses. **Every matcher below is load-bearing**; each was verified against Claude Code's
+hooks reference on 2026-08-15, and the ones that are missing are what make a row lie.
 
-| Event | What it means | Status it writes |
+| Event (matcher) | What it means | Writes |
 |---|---|---|
+| `SessionStart` (`startup`, `resume`, `clear`) | a session began or was reset | `ready` |
 | `UserPromptSubmit` | a prompt was just submitted | `working` |
-| `Notification` | Claude needs input, or permission for a tool | `waiting` |
+| `PreToolUse` (any tool) | a tool call is starting | `working` |
+| `Notification` (`permission_prompt`, `agent_needs_input`, `elicitation_dialog`) | Claude is blocked on a human | `waiting` |
+| `Notification` (`elicitation_complete`, `elicitation_response`) | the human answered it | `working` |
+| `PostToolUse` (any tool) | a tool ran, so a permission was granted | `working` |
+| `PermissionDenied` (any tool) | **auto mode** denied a call; the agent runs on | `working` |
 | `Stop` | the turn finished; ready for the next prompt | `ready` |
+| `StopFailure` | the turn ended on an API error | `ready` |
+| `SessionEnd` | the session is over | deletes the file |
+
+**Most of those rows exist because the naive three-event version writes a status that
+lies**, which §2.7 rejects screen-scraping to avoid — so they are corrections, not
+completeness for its own sake:
+
+- **`Notification` must carry a matcher.** It fires for nine notification types, and one of
+  them is `idle_prompt` — "Claude finished responding about 60 seconds ago and you haven't
+  typed since". Subscribed bare, every idle agent flips `ready` → `waiting` a minute after
+  each turn, `ready` becomes unreachable in the steady state, and `waiting` stops meaning
+  *this agent is blocked* — the one distinction §1 says the tool exists for. Gate check 9
+  is the check that sees it; nothing shorter can.
+- **`SessionStart` must carry one too**, for the same reason in the opposite direction. Its
+  matchers are `startup`, `resume`, `clear`, `compact` and `fork`, and **`compact` fires on
+  auto-compaction in the middle of a turn** — registered bare, every compaction of a long
+  turn tells a human "this agent is done, go prompt it" while it works. `fork` is excluded
+  as ambiguous rather than wrong; the next real event corrects it either way.
+- **Something has to clear `waiting`.** Granting a permission fires no notification of its
+  own, so without `PostToolUse` the row reads `waiting` for the rest of a turn the agent is
+  actively working through.
+
+**Two endings fire nothing, and both are recorded as holes rather than papered over:**
+
+- **A human denying a permission.** `PermissionDenied` is *not* that event — it fires "when
+  auto mode denies a tool call" — and `PostToolUseFailure` fires only for a tool that ran
+  and errored, which a denied call never does. Nothing announces a human's *no*. The
+  bound is `PreToolUse`, which is in the table for this reason: it fires before the next
+  tool call (the documented order is `PreToolUse` → `PermissionRequest` → `PostToolUse`),
+  so a denial that Claude follows with another tool call clears within one call, and one it
+  follows with plain text clears at `Stop`. In between, the row says `waiting` while the
+  agent works. That window is the residual lie, and it is smaller than the turn.
+- **A user interrupt (Esc).** `Stop` hooks "don't fire on user interrupts" and an API error
+  fires `StopFailure` instead, so an interrupted turn is left saying `working` with nothing
+  to correct it. **Nothing covers this**, and it is what OQ-4's staleness rule is for rather
+  than something an eleventh registration fixes.
+
+`PermissionRequest` was considered for `waiting` and rejected: it fires whenever a tool
+call *needs a decision*, which on a permissive settings file may include calls that are
+auto-approved, and a row that flashes `waiting` on every tool call is noise. `Notification`
+fires when the human-facing prompt actually appears — about six seconds after Claude stops
+seeing typing, which is a delay the gate has to know about (check 2) and is arguably the
+right filter anyway: a permission answered in three seconds never needed a dashboard.
+
+**The hook writes nothing to standard output.** For `UserPromptSubmit` and `SessionStart`,
+Claude Code adds plain-text stdout to Claude's context — so a stray `echo` in this hook
+silently prepends text to the user's prompt in every Claude session on the machine. It
+writes its file, and exits 0 whatever happens.
 
 Each firing writes one small status file. Oko reads those files and merges them into the
 table. **Claude Code decides when a hook runs and runs it; Oko never queries Claude Code
@@ -171,8 +226,9 @@ and Claude Code never knows Oko exists.** The coupling is one directory of small
 in one direction.
 
 `~/.claude/settings.json` exists on this machine and has **no `hooks` key** today
-(checked 2026-08-14), so Phase 3 adds one rather than merging into an existing
-configuration.
+(checked 2026-08-14, re-confirmed 2026-08-15), and this repo has no project-level
+`.claude/settings.json` to collide with, so Phase 3 adds a key rather than merging into an
+existing configuration.
 
 ### 2.4 Matching a status update to a row
 
@@ -334,7 +390,22 @@ least likely to survive.
   pane can only address *itself* that way, so it cannot enumerate other tabs and is not a
   fourth candidate — but it is the cheapest possible way for Oko to learn its **own**
   session id, and Phase 1 should not rediscover it as a detour.
-- **OQ-2 — How does Oko decide a row is a Claude Code tab?** *(design call — blocks Phase
+- **OQ-2 — How does Oko decide a row is a Claude Code tab?** **RESOLVED 2026-08-15, during
+  Phase 3's review round: a session is a Claude tab iff the status directory holds a file
+  for its iTerm2 session id.** Full stop — **staleness is a property of the status value,
+  never of Claude-tab identity** (OQ-4 (c)). A stale row is still a Claude row, still
+  labelled `claude`; it is its *status* that stops claiming `working`. Tying identity to
+  freshness would have made gate check 6 fail a correct build for most of a run under the
+  gate's own `OKO_STALE_AFTER=10s`. What keeps identity honest is deletion, not ageing:
+  `SessionEnd` removes the file and OQ-4 (b) sweeps a pane that died without one. The join
+  is an
+  exact UUID match against `src/iterm/watch.rs:Row.session_id` — no name matching anywhere,
+  which is what the argument below demands. Two consequences worth stating because an
+  implementer meets both: the `claude` label in the process column is **a literal Oko
+  renders for any row carrying a status**, since the status file has no name field and
+  §2.2's job name is untrustworthy; and a session that has started but never been prompted
+  is a Claude tab from `SessionStart` onward, which is why that event is in §2.3's table
+  rather than the three the seed had. *(design call — blocks Phase
   3)* Not by process name. iTerm2 reports the **deepest** foreground job (§2.2), so a
   Claude tab surfaces as `node`, and on this machine a `caffeinate -i claude` child sits
   in the same process group as its `claude` parent. Name-matching cannot be made reliable
@@ -379,12 +450,50 @@ least likely to survive.
   inside iTerm2**: a 5.000 s `sleep` produced its two notifications 5.602 s apart, so the
   push carries roughly 0.6 s of skew. That fits the 2-second bound with room, but it is
   not instantaneous and a gate measured by stopwatch will see it.
-- **OQ-4 — What removes a status file when its session is gone?** *(design call —
+- **OQ-4 — What removes a status file when its session is gone?** **RESOLVED 2026-08-15,
+  during Phase 3's review round, and it takes three mechanisms because the two candidates
+  below answer different questions** — deletion answers "the directory accretes forever",
+  staleness answers "a hung session reads `working` indefinitely", and neither covers the
+  other:
+  1. **`SessionEnd` deletes the file.** It is the one moment that is unambiguous, it exists
+     (matchers `clear`, `resume`, `logout`, `prompt_input_exit`,
+     `bypass_permissions_disabled`, `other`), and it costs one more line in the same hook.
+     Its hooks share a 1.5-second budget, which a file delete is nowhere near.
+  2. **Oko sweeps a file whose iTerm2 session id is in no window of `ListSessions`** — the
+     *whole* response, not Oko's own window. This is the correction to the original
+     candidate 1 and it is not cosmetic: rows are window-scoped
+     (`src/iterm/watch.rs:rescan` filters on `p.window_id == self.window_id`), so deleting
+     against the row set would destroy the live status of Claude tabs in other windows, and
+     two Okos in two windows would delete each other's files continuously. Scoped to the
+     full session list, both agree and neither is wrong. This covers a `kill -9`, where no
+     hook runs at all. **It runs in `rescan`, not on the status tick**: `rescan` already
+     receives the whole `ListSessionsResponse` on every layout change, which is both the
+     scope this mechanism needs and within the 2 s check 8 allows, whereas the tick is
+     gated on the status directory's mtime and a closing tab writes nothing. **Buried
+     sessions are exempt** — `ListSessionsResponse.buried_sessions` sits outside
+     `windows[]` and `src/iterm/watch.rs:flatten` drops it deliberately, so "in no window"
+     is true of a buried but perfectly alive Claude session.
+  3. **`working` goes stale; `waiting` and `ready` never do.** Every status carries a
+     timestamp, and a `working` older than `OKO_STALE_AFTER` (default **10 minutes**)
+     renders as **`◌ stale`** — a fourth value in the glyph family §1 sketches with three,
+     added by this phase and swept into §1 and `CLAUDE.md` at its close-out, and a status Oko shows
+     on a row it still labels `claude`. It is needed because a user interrupt (Esc) fires no
+     hook at all (§2.3). The threshold is a trade rather than a safe number: `PreToolUse`
+     and `PostToolUse` stamp either side of every tool call, so an agent doing things stays
+     fresh — but **one quiet 15-minute build or test run goes stale mid-work**, and that is
+     accepted because the failure direction is "I don't know" rather than a confident wrong
+     answer. **`waiting` is deliberately exempt**: §1's own example is an agent that has
+     been waiting twenty minutes, so ageing that out would delete the answer the product
+     exists to give. `ready` is exempt because it is legitimately hours old.
+
+  A pane where `TERM_SESSION_ID` is unset — Claude Code in Terminal.app, or under tmux —
+  has no iTerm2 identity to join on, so the hook writes **no file at all** rather than one
+  nothing can ever match or sweep. *(design call —
   blocks Phase 3)* A closed tab leaves its last status behind. Left alone, the directory
   accretes files forever and a crashed session reads as `working` indefinitely.
-  Candidates: Oko deletes files whose session id is absent from the API's session list on
+  ~~Candidates: Oko deletes files whose session id is absent from the API's session list on
   each refresh; or every status carries a timestamp and stale entries render as `unknown`
-  rather than as their last value. These are not exclusive.
+  rather than as their last value. These are not exclusive.~~
 
 ## 4. Implementation phases
 
@@ -546,29 +655,97 @@ can use.*
 project exists for; Phase 2 is the frame it hangs in.*
 
 - **Scope:**
-  - Resolve OQ-2 and OQ-4 during this phase's review round, not during implementation.
-  - A hook script, committed to this repo, that reads Claude Code's JSON on stdin and
-    `TERM_SESSION_ID` from the environment and writes one status file per session,
-    carrying: iTerm2 session UUID, Claude session id, status, and a timestamp.
-  - Registration of that script for `UserPromptSubmit`, `Notification` and `Stop` in
-    `~/.claude/settings.json`, which currently has no `hooks` key — plus a documented
-    way for a user to install it, since the settings file is outside this repo.
-  - Oko reads the status directory and merges each status onto the row whose session id
-    matches (§2.4), rendering the status column of §1's sketch — including labelling
-    those rows `claude` rather than `node`, per OQ-2's resolution.
-  - Staleness handling, per OQ-4's resolution.
-- **Exit gate:** With **two** Claude Code sessions running in two tabs of one window:
+  - ~~Resolve OQ-2 and OQ-4 during this phase's review round, not during implementation.~~
+    Both resolved 2026-08-15, in that round. What they settled is built here.
+  - **The hook: a second binary in this crate, `src/bin/oko-hook.rs`.** It reads Claude
+    Code's JSON on stdin (`session_id`, `hook_event_name`, and **`notification_type`** —
+    without the third, the two `Notification` rows of §2.3's table are indistinguishable at
+    the hook and write opposite statuses), reads `TERM_SESSION_ID` — then
+    `ITERM_SESSION_ID`, the same two names in the same order as
+    `src/iterm/watch.rs:resolve_own_session`, or a pane exporting only the second joins on
+    Oko's side while the hook silently writes nothing — and writes one file per iTerm2
+    session. A binary rather than a shell
+    script because parsing that JSON in shell needs `jq`, which is present here and
+    guaranteed nowhere, and because the crate already ships a second binary.
+    - Path: **`~/.oko/status/<iterm-uuid>.json`**, absolute — a hook runs with `cwd` set to
+      whichever project *that* session is in, so nothing relative and nothing under
+      `$CLAUDE_PROJECT_DIR` resolves to this checkout.
+    - Contents: iTerm2 session UUID, Claude session id, status, and an RFC-3339 timestamp.
+    - Written **temp-file-plus-rename in the same directory**, because Oko reads it
+      concurrently. The rename is also what makes the directory's mtime move on every
+      write, which is what the reader below watches.
+    - Writes nothing to stdout (§2.3), and exits 0 on every path including its own errors.
+      A hook that fails must not be visible in someone's Claude session.
+  - Registration for **every row of §2.3's table** — that table is the referent, and a
+    count restated here is a number that rots — in `~/.claude/settings.json`, which
+    has no `hooks` key — with the **absolute** path of the installed binary. Since the
+    settings file is outside this repo, `oko-hook --print-settings` emits the exact JSON
+    block to paste, and `README.md` documents the step. Oko does not edit that file itself.
+  - **Reaching the table** (`src/iterm/watch.rs`, `src/ui.rs`). The shipped program is
+    purely event-driven — `src/ui.rs:run` blocks on `events.recv()` and the only producer
+    is the watcher — so the status directory needs an event source, and there is none.
+    Mechanism: the watcher already wakes every 100 ms to check its command channel
+    (`src/iterm/watch.rs:IDLE_TICK`); on that tick it **stats the status directory** and
+    re-reads it only when the mtime moved, then emits a snapshot if the merged view
+    changed. **This is not the polling OQ-3 ruled out** — that answer is about iTerm2's
+    API, which still pushes; this is one `stat` per tick against a local directory, and a
+    filesystem-notification crate would be a dependency and a second event source for no
+    gain a stopwatch can see.
+  - **Where status lives.** The watcher owns a `HashMap<session id, Status>` beside its
+    rows, and `Watcher::snapshot` merges it in: `Row` gains a `status` field that is filled
+    at snapshot time, so `self.rows` carries `None` there and `rescan`'s `rows != self.rows`
+    is left doing exactly the job it does today. **Status changes are therefore caught by
+    the tick's own comparison of the merged view, not by `rescan`'s** — one sentence worth
+    being precise about, because the two mechanisms look interchangeable and only one of
+    them ever sees a status move. `src/ui.rs` gains a fourth column without gaining a
+    second source of truth. The columns become `tab · process · status · where`, the status
+    cell carrying the glyph and the word as §1's sketch draws them — that sketch's header
+    line predates the column and names three, and the phase's layout is what governs. The
+    process column renders the literal `claude` for any row carrying a status (OQ-2), which
+    is a **deliberate change to `rules/dashboard-ui.md`'s current claim** that the column
+    shows `jobName` verbatim.
+  - Staleness and deletion, per OQ-4's three mechanisms. `OKO_STALE_AFTER` is read from the
+    environment (default 10 minutes) so the gate can exercise the rule in seconds.
+- **Exit gate:** **One window, three tabs**: two Claude Code sessions (A and B) and Oko
+  itself — Oko's own tab is not optional, and omitting it fails every check for a correct
+  build. Oko is **started before the checks and restarted for none of them**, as in Phase
+  2, because every check below is a liveness check. Run with `OKO_STALE_AFTER=10s`.
   1. Submitting a prompt in tab A flips A's row to `working` within 2 seconds, and **B's
      row does not change** — the cross-talk check, and the one most likely to fail.
-  2. A tool-permission prompt in tab A flips A's row to `waiting`.
-  3. Turn completion in tab A flips A's row to `ready`.
-  4. Driving B through the same three transitions moves only B's row.
-  5. Both rows read `claude` in the process column, not the descendant job name iTerm2
-     reports for them (§2.2 — `node` on this machine, whatever the session's MCP
-     configuration produces on another).
-  6. Closing tab A removes its row, and leaves no status behind that could reattach to a
-     later session in the reused pane.
-- **Close-out:** seeds `rules/claude-status.md` (the hook script, the status file format,
-  the identity join, staleness). Updates `rules/dashboard-ui.md` for the new column, and
-  the `CLAUDE.md` observable line if the status vocabulary changed. User-facing install
-  instructions for the hook are part of this phase, not a follow-up.
+  2. A tool-permission prompt in tab A flips A's row to `waiting`. **Do not answer it
+     immediately**: the notification is documented to fire about six seconds after Claude
+     stops seeing typing, so a checker who answers in three seconds sees no `waiting` at
+     all and fails a correct implementation. This is the one literal here that can do that.
+  3. **Approving that permission flips A back to `working` within 2 seconds.** Nothing
+     announces a granted permission, so an implementation built from the seed's three
+     events reads `waiting` for the rest of the turn — a status that lies, which is what
+     §2.7 rejects screen-scraping to avoid.
+  4. Turn completion in tab A flips A's row to `ready`.
+  5. Driving B through the same transitions moves only B's row.
+  6. Both rows read `claude` in the process column, not the descendant job name iTerm2
+     reports for them (§2.2, and OQ-2's correction: `node` on two of four tabs measured and
+     `rust-analyzer-pr` on the other two — whatever happens to be deepest at that instant).
+  7. **Submit a prompt in A and press Esc a second later**, while `working` is still fresh —
+     interrupting a turn that has been quiet longer than `OKO_STALE_AFTER` would find the
+     row already stale and test nothing. Nothing fires on the Esc, so A's row is left saying
+     `working`; within 12 seconds it must stop, and render `◌ stale`.
+  8. Closing tab A removes its row, and **within 2 seconds `~/.oko/status/` contains no
+     file named for A's iTerm2 session id** — checked with `ls`, because the previous
+     wording ("leaves no status behind that could reattach") named no observation and was
+     vacuous under the confirmed join key: a reused pane gets a new UUID, so a stale file
+     cannot reattach whether or not anything ever deletes it. Every candidate resolution of
+     OQ-4, including doing nothing, passed it.
+  9. **Leave B untouched for two minutes after its turn ends.** Its row still reads `ready`
+     and never flips to `waiting`. This is the only check that sees `idle_prompt` (§2.3);
+     checks 1–8 all complete within seconds and none of them looks again at t+60 s.
+- **Close-out:** seeds `rules/claude-status.md` (the hook binary and its events, the status
+  file path and format, the identity join, deletion and staleness). Updates
+  `rules/dashboard-ui.md` for the new column **and for the claim this phase invalidates** —
+  it currently says the process column shows `jobName` verbatim, which stops being true for
+  a row with a status. Both target rules sit near their caps (`dashboard-ui` 51/55,
+  `iterm-api` 93/95) and `max_lines` is a hard linter check, so this close-out **raises or
+  cuts deliberately and says which**, as Phase 2's did. `README.md` is user-facing here
+  twice over: the hook install step is part of this phase rather than a follow-up, and its
+  "What it does not do yet" section is written for exactly this phase and stops being true.
+  Updates the `CLAUDE.md` observable line **and §1's own sentence and sketch**, both of
+  which name three statuses and neither of which mentions a stale one.
