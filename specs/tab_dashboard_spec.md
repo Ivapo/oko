@@ -10,7 +10,7 @@ last_updated: 2026-08-14
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
     reviewed: 2026-08-14
-    shipped: null
+    shipped: 2026-08-14
     cut: null
     by: null
   - name: "Phase 2 — live tab table with Enter-to-jump"
@@ -195,6 +195,12 @@ API's session id. **Phase 1 settles it and writes the answer back into this sect
 if the UUID is not the key, the sentence above naming it as the join is what gets
 corrected, and the hook writes whichever identifier does join.
 
+**CONFIRMED 2026-08-14 (Phase 1).** It is the UUID. A session's `id` variable equals the
+part of `TERM_SESSION_ID` after the colon, so nothing above needed correcting. Both
+fallbacks also join and are recorded in `rules/iterm-api.md`, which matters because it
+makes "none of the three joins" a real failure rather than a formality — but `id` is the
+key, and Phase 3's hook writes that.
+
 ### 2.5 Navigation
 
 Each row carries the iTerm2 session id it was built from. On Enter, Oko calls the API's
@@ -252,7 +258,17 @@ least likely to survive.
 
 ## 3. Open questions
 
-- **OQ-1 — How does a Rust binary reach the iTerm2 API?** *(design call — Phase 1 exists
+- **OQ-1 — How does a Rust binary reach the iTerm2 API?** **RESOLVED 2026-08-14 by Phase
+  1; the mechanics live in `rules/iterm-api.md`.** Candidate 1 works and nothing below it
+  was needed. The endpoint is a Unix domain socket at `~/Library/Application
+  Support/iTerm2/private/socket`, present only while the API is on. A human enables it
+  once at Settings → General → Magic → *Enable Python API*, effective without a restart.
+  Authorization is AppleScript: `request cookie and key for app named …` returns a
+  single-use pair carried in `x-iterm2-cookie` and `x-iterm2-key`, and macOS's Automation
+  grant for the asking client is the thing that actually gates it. The transport is
+  blocking `tungstenite` over `UnixStream` speaking protobuf, with iTerm2's `api.proto`
+  vendored and compiled by `protox` — no second runtime, no `protoc`, one binary.
+  *(design call — Phase 1 exists
   to answer it)* The seed named "the iTerm2 Python API" and a Rust/ratatui stack in the
   same breath; those do not compose for free. The question has three parts, and the first
   is not optional: **where the API endpoint actually is** (§2.1 establishes only where it
@@ -260,21 +276,22 @@ least likely to survive.
   Oko uses**. Candidates for the third part:
   1. **Speak the API's protocol directly from Rust.** No second runtime, one binary.
      Cost: implementing a client against a protocol whose stability is iTerm2's business.
-  2. **A Python sidecar Oko spawns**, using the official library, emitting
+  2. ~~**A Python sidecar Oko spawns**, using the official library, emitting
      line-delimited JSON on stdout. Cost: a second runtime and a process to supervise,
-     and the `iterm2` module is **not installed** in this machine's `python3` today.
-  3. **Drop the API for AppleScript/`osascript`.** Cheapest to reach; almost certainly
+     and the `iterm2` module is **not installed** in this machine's `python3` today.~~
+  3. ~~**Drop the API for AppleScript/`osascript`.** Cheapest to reach; almost certainly
      cannot deliver §2.2's live variables or §2.5's activate-by-session-id cleanly, and
-     it is the one candidate that would also invalidate §2.9.
+     it is the one candidate that would also invalidate §2.9.~~
 
-  **Try them in that order, and stop at the first that works.** The criterion is
+  ~~**Try them in that order, and stop at the first that works.**~~ The criterion is
   ordered, not a judgement call: a transport is acceptable only if it can (a) enumerate
   the sessions of another tab, (b) read both variables §2.2 needs, and (c) activate a
-  session by id. Among those that qualify, prefer the one needing no second runtime —
+  session by id. ~~Among those that qualify, prefer the one needing no second runtime —
   which is the order 1, 2, 3 above. Candidate 3 additionally reopens §2.9, so choosing it
   is a decision to re-argue the stack, not merely a transport call. **If none of the three
   reaches the API, stop and escalate**: the product as designed is not buildable, and that
-  is a finding for a human rather than a problem for Phase 2 to inherit.
+  is a finding for a human rather than a problem for Phase 2 to inherit.~~ Candidate 1 met
+  all three criteria and the ordering never had to be walked; §2.9 stands untouched.
 
   **Named and rejected as a transport for the table:** `it2getvar`, shipped in
   `/Applications/iTerm.app/Contents/Resources/utilities` and already on `PATH`, reads
@@ -290,12 +307,33 @@ least likely to survive.
   confirmed in Phase 3's review: **a session is a Claude tab iff a fresh status file
   exists for it**, and the process name is only ever a display value. This inverts the
   seed's design, which checked the name first.
+
+  **CORRECTED 2026-08-14 (Phase 1 measurement).** "Surfaces as `node`" is too specific.
+  Of four Claude Code tabs open during the gate, two reported `node` and two reported
+  `rust-analyzer-pr` — a rust-analyzer proc-macro server, deeper in the tree than any
+  `node`. A fifth non-Claude tab reported `rustup` and then `probe` seconds apart, being
+  the same pane at two moments. The corrected claim is the stronger one: **the value is
+  whatever happens to be deepest at the instant iTerm2 sampled**, which is unstable within
+  a single session, not merely across configurations. Also measured: `jobName` is
+  truncated to 16 bytes (`MAXCOMLEN`), so a long name is not even reported in full.
 - **OQ-3 — Does the table refresh on a timer, or does the API push changes?** *(design
   call — Phase 2)* The API supports variable-change subscriptions, so the push branch
   exists; whether it covers both variables §2.2 needs is what Phase 1's spike observes.
   If Oko polls instead, **the interval must be ≤1 s**, because Phase 2's gate is keyed to
   a 2-second wall-clock bound and a slower interval fails a gate the spec would otherwise
   never have told the implementer how to satisfy.
+
+  **Observed 2026-08-14 by Phase 1** — still Phase 2's call, but it now has measurements
+  rather than a branch. Push covers both variables §2.2 needs: `NOTIFY_ON_VARIABLE_CHANGE`
+  delivers `path` and `jobName`, and `NOTIFY_ON_NEW_SESSION` and
+  `NOTIFY_ON_TERMINATE_SESSION` both fire, so a tab opening and closing is pushed too.
+  Two things Phase 2 has to design around. **A subscription is per session and per
+  variable**, so a session that appears later is not covered and must be subscribed when
+  its new-session notification arrives — which is a fresh way to get a permanently stale
+  row, and it is invisible until someone opens a tab. And **`jobName` is poll-driven
+  inside iTerm2**: a 5.000 s `sleep` produced its two notifications 5.602 s apart, so the
+  push carries roughly 0.6 s of skew. That fits the 2-second bound with room, but it is
+  not instantaneous and a gate measured by stopwatch will see it.
 - **OQ-4 — What removes a status file when its session is gone?** *(design call —
   blocks Phase 3)* A closed tab leaves its last status behind. Left alone, the directory
   accretes files forever and a crashed session reads as `working` indefinitely.
