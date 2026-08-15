@@ -264,8 +264,14 @@ least likely to survive.
   Support/iTerm2/private/socket`, present only while the API is on. A human enables it
   once at Settings → General → Magic → *Enable Python API*, effective without a restart.
   Authorization is AppleScript: `request cookie and key for app named …` returns a
-  single-use pair carried in `x-iterm2-cookie` and `x-iterm2-key`, and macOS's Automation
-  grant for the asking client is the thing that actually gates it. The transport is
+  single-use pair carried in `x-iterm2-cookie` and `x-iterm2-key`. §2.1's third fact —
+  "a per-process authorization step with a cookie and a user-facing confirmation prompt" —
+  is half right. The cookie is per process, but the prompt is not: **the only dialog a
+  human sees is iTerm2's own *Enable Python API?*, once, when the feature is switched on.**
+  No macOS Automation grant is involved, because a client running inside iTerm2 is
+  attributed to iTerm2 as responsible process and an app scripting itself needs no grant —
+  `tccd` logged zero `kTCCServiceAppleEvents` requests across every connection made on
+  2026-08-14. A client started outside iTerm2 would need one. The transport is
   blocking `tungstenite` over `UnixStream` speaking protobuf, with iTerm2's `api.proto`
   vendored and compiled by `protox` — no second runtime, no `protoc`, one binary.
   *(design call — Phase 1 exists

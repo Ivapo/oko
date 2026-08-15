@@ -7,7 +7,7 @@ covers: >
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a
   client authorizes and how a grant is reset, the transport, the session join key, and the
   variables, operations and subscriptions Oko uses
-max_lines: 70
+max_lines: 75
 generated: 2026-08-14
 ---
 
@@ -16,27 +16,31 @@ generated: 2026-08-14
 A **WebSocket server inside iTerm2** carrying protobuf over a Unix domain socket at
 `~/Library/Application Support/${IT2_SUITE:-iTerm2}/private/socket`
 (`src/bin/probe.rs:socket_path`) — measured against iTerm2 3.6.11 on 2026-08-14, protocol
-version 1.11. The socket exists only while the API is enabled, so its absence is the "API
-is off" signal rather than a wrong path; iTerm2 also accepts TCP `ws://localhost:1912`
-when it is missing, which Oko does not use.
+version 1.11, reported back in `X-iTerm2-Protocol-Version`. The socket exists only while
+the API is enabled, so its absence is the "API is off" signal rather than a wrong path.
 
 ## Setup, and undoing it
 
 Enabling is a human step, once per machine: iTerm2 → Settings (⌘,) → General → Magic →
-**Enable Python API**. Effective at once, no restart; the socket appears and
+**Enable Python API**, which raises iTerm2's own *Enable Python API?* confirmation. That
+dialog is **the only prompt a human sees**, and it is about the feature, not about any
+particular client. Effective at once, no restart; the socket appears and
 `defaults read com.googlecode.iterm2` gains `EnableAPIServer = 1`. A client then gets a
 cookie and key from AppleScript, printed space-separated
 (`src/bin/probe.rs:request_cookie_and_key`):
 
     osascript -e 'tell application "iTerm2" to request cookie and key for app named "oko"'
 
-**AppleScript access is the authorization.** macOS raises an Automation prompt the first
-time a client asks, and granting it is what lets the cookie be issued; the app name is
-what iTerm2 shows in its API console. **A cookie is spent by the connection that uses
-it** — a retry needs a fresh one, or it fails on a stale cookie and looks like an
-unrelated problem. To undo: System Settings → Privacy & Security → Automation, or
-`tccutil reset AppleEvents com.googlecode.iterm2`. Turning the API off removes the socket
-and drops every connection.
+**No Automation grant is involved when the client runs inside iTerm2**, which Oko always
+does — it is a tab of the window it watches. macOS attributes the `osascript` call to
+iTerm2 as the responsible process, and an app scripting itself needs no grant: `tccd`
+logged **zero** `kTCCServiceAppleEvents` requests across every connection made on
+2026-08-14. Expect no Automation entry to appear, and do not go looking for one. A client
+started *outside* iTerm2 is attributed to whatever launched it and would need the grant;
+that is what `tccutil reset AppleEvents com.googlecode.iterm2` and System Settings →
+Privacy & Security → Automation undo. **A cookie is spent by the connection that uses it**
+— a retry needs a fresh one, or it fails on a stale cookie and looks unrelated. Turning
+the API off removes the socket and drops every connection.
 
 ## Transport
 
@@ -47,9 +51,9 @@ Connection / Upgrade / Sec-WebSocket-Version / Sec-WebSocket-Key is absent; it s
 them only for the `&str`-URI form, which cannot carry the rest: `Origin: ws://localhost/`,
 `Sec-WebSocket-Protocol: api.iterm2.com`, `x-iterm2-cookie`, `x-iterm2-key`,
 `x-iterm2-advisory-name`, and `x-iterm2-library-version` — where **`oko 1.0` is
-accepted**, so it need not imitate the official `python <version>`. iTerm2 answers with
-`X-iTerm2-Protocol-Version`. Each frame is one binary `ClientOriginatedMessage` or
-`ServerOriginatedMessage`; responses echo the request's `id`, notifications carry none.
+accepted**, so it need not imitate the official `python <version>`. Each frame is one
+binary `ClientOriginatedMessage` or `ServerOriginatedMessage`; responses echo the
+request's `id`, notifications carry none.
 `proto/api.proto` is vendored verbatim from `gnachman/iTerm2`, commit `f4ca0004`, sha256
 `6f1a4e75…`, fetched 2026-08-14 — self-contained, so `protox` and `prost-build` compile it
 in `build.rs` with no `protoc`.

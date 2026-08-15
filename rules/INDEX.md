@@ -2,5 +2,5 @@
 
 # Rules
 
-- **[iterm-api](iterm-api.md)** — generated 2026-08-14 · 2 sources · 70/70 lines
+- **[iterm-api](iterm-api.md)** — generated 2026-08-14 · 2 sources · 74/75 lines
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables, operations and subscriptions Oko uses
