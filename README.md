@@ -6,12 +6,12 @@ doing — and jumps to the one you press Enter on.
 ```
  Oko — window 0                                        5 rows
  ────────────────────────────────────────────────────────────
-   tab  process           where
- ▸ 1    zsh               ~/dev/main/oko
-   2    hx                /tmp
-   3    node              ~/dev/main/spec-driven-dev
-   3    zsh               ~/dev/main/spec-driven-dev
-   4    oko               ~/dev/main/oko
+   tab  process           status      where
+ ▸ 1    claude            ● waiting   ~/dev/main/oko
+   2    claude            ◐ working   ~/dev/main/spec-driven-dev
+   3    claude            ◌ stale     ~/dev/main/mdview
+   3    zsh                           ~/dev/main/spec-driven-dev
+   4    oko                           ~/dev/main/oko
  ────────────────────────────────────────────────────────────
  ↵ jump    ↑↓ select    q quit
 ```
@@ -19,6 +19,22 @@ doing — and jumps to the one you press Enter on.
 One row per **session**, not per tab: a split tab is two rows sharing one tab number, and
 Oko's own session is a row like any other. The table is live — a `cd`, a command starting,
 a tab opened, closed, split or dragged all show up without restarting anything.
+
+The `status` column is the reason the tool exists: with three agents running, it says which
+one is blocked without your visiting all three.
+
+| | |
+|---|---|
+| `◐ working` | the agent is doing something |
+| `● waiting` | it is blocked on you — a permission, a question |
+| `○ ready` | the turn is over; it wants a prompt |
+| `◌ stale` | it *said* `working`, and has said nothing since. Oko does not know |
+
+`stale` is the honest answer to a case nothing reports: pressing Esc to interrupt a turn
+fires no hook at all, so the last thing Oko heard was `working`. After
+`OKO_STALE_AFTER` (default 10 minutes) the row stops claiming it. `waiting` and `ready`
+never go stale — an agent that has been waiting twenty minutes is exactly the thing you
+want to see, and `ready` is legitimately hours old.
 
 ## Setup — once per machine
 
@@ -33,6 +49,35 @@ needs no grant. It takes effect immediately, with no restart.
 If the API is off, Oko says so and points here rather than failing obscurely. The details —
 where the socket is, how authorization works, how to reset a grant — are in
 [`rules/iterm-api.md`](rules/iterm-api.md).
+
+## Setup — the status column
+
+The `status` column comes from Claude Code itself, through hooks. Nothing is installed per
+tab and no shell profile is touched; you register one command once:
+
+```sh
+cargo install --path .          # puts oko, oko-hook and probe on your PATH
+oko-hook --print-settings       # prints the exact JSON block, with its absolute path
+```
+
+Merge that block into `~/.claude/settings.json` — it is a top-level `hooks` key, and hook
+entries merge across settings levels, so it will not clobber a project-level block. **Oko
+never edits that file itself.** Claude Code reads hooks at session start, so restart any
+session you want in the table.
+
+Install with `cargo install` rather than pointing the hooks at `target/release/oko-hook`: a
+`cargo clean` would otherwise leave every Claude session on the machine running a hook that
+no longer exists.
+
+Every registration in that block is load-bearing, and two of the matchers are there to stop
+the dashboard *lying* — `Notification` fires an `idle_prompt` a minute after every turn,
+and `SessionStart` fires on auto-compaction in the middle of one. See
+[`rules/claude-status.md`](rules/claude-status.md) for the whole vocabulary, and for the two
+cases nothing reports at all.
+
+The hook writes one small file per pane under `~/.oko/status/`, prints nothing, and exits 0
+whatever happens — it cannot make itself visible in your session. Set `OKO_HOOK_DEBUG=1` to
+send its errors to `~/.oko/hook.log`.
 
 ## Running it
 
@@ -53,15 +98,22 @@ leave open.
 
 Enter changes which tab is focused and nothing else: nothing is typed into the target pane.
 
-## What it does not do yet
+## What it does not do
 
-The `process` column shows iTerm2's `jobName` — the *deepest* foreground job, truncated to
-16 bytes, so a tab running Claude Code reads as `node` or whatever its subprocess tree
-happens to bottom out in. Turning those rows into `claude` with a `working` / `waiting` /
-`ready` status is Phase 3 of [`specs/tab_dashboard_spec.md`](specs/tab_dashboard_spec.md),
-and it is the reason the tool exists.
+**Oko never spawns, kills, resizes or configures anything**, and there is no driving a
+Claude session from here — no sending prompts, no answering permission requests. It
+observes tabs you opened.
 
-Oko never spawns, kills, resizes or configures anything. It observes tabs you opened.
+For a plain tab the `process` column shows iTerm2's `jobName` verbatim — the *deepest*
+foreground job, truncated to 16 bytes, so `rust-analyzer-proc-macro-srv` reads as
+`rust-analyzer-pr`. That column is a display value and never an identity test: a row says
+`claude` because a status file exists for its session, not because of anything a process is
+called.
+
+**Two things nothing reports, and Oko does not pretend otherwise.** A *human* denying a
+permission fires no event — the row reads `waiting` until the agent's next tool call or the
+end of the turn, whichever comes first. And an Esc interrupt fires nothing at all, which is
+what `◌ stale` is for.
 
 ## Diagnostics
 

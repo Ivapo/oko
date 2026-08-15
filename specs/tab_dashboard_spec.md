@@ -20,7 +20,7 @@ phases:
     by: null
   - name: "Phase 3 — Claude Code status from hooks"
     reviewed: 2026-08-15
-    shipped: null
+    shipped: 2026-08-15
     cut: null
     by: null
 
@@ -46,17 +46,24 @@ the window is doing — working directory and foreground process for a plain tab
 Enter on a row moves iTerm2's focus to that tab. Anything that does not end up visible in
 that table, or does not make jumping to a tab work, is mechanism rather than product.
 
-The end state, sketched:
+**CORRECTED 2026-08-15 (Phase 3's review round; swept in at its close-out).** That
+vocabulary is three values and the shipped one is four. `◌ stale` is the fourth — a
+`working` that has stopped being refreshed, which is what an Esc interrupt leaves behind
+because it fires no hook at all (OQ-4 (c)). The sentence above and the sketch below both
+predate it, and the sketch's header line predates the status column itself, naming three
+columns for a table that draws four.
+
+The end state, sketched — **corrected to what shipped**:
 
 ```
  Oko — window 0                                        5 rows
  ────────────────────────────────────────────────────────────
-   tab  process                    where
- ▸ 1    claude  ● waiting          ~/dev/main/oko
-   2    claude  ◐ working          ~/dev/main/spec-driven-dev
-   3    claude  ○ ready            ~/dev/main/mdview
-   4    nvim                       ~/dev/main/oko/src
-   5    oko                        ~/dev/main/oko
+   tab  process           status      where
+ ▸ 1    claude            ● waiting   ~/dev/main/oko
+   2    claude            ◐ working   ~/dev/main/spec-driven-dev
+   3    claude            ◌ stale     ~/dev/main/mdview
+   4    nvim                          ~/dev/main/oko/src
+   5    oko                           ~/dev/main/oko
  ────────────────────────────────────────────────────────────
  ↵ jump    ↑↓ select    q quit
 ```
@@ -65,7 +72,8 @@ Row 4 is a plain tab: it gets a process name and a directory and no status, beca
 nothing reports one for it. Row 5 is Oko itself — it is a session in the window like any
 other and is not special-cased out. Rows 1–3 are Claude Code tabs, and the status column
 is the reason the tool exists: a human running three agents wants to know which one is
-blocked without visiting all three.
+blocked without visiting all three. Row 3 shows the fourth value: Oko heard `working` and
+has heard nothing since, and says so rather than keeping a claim it can no longer support.
 
 **Two things in that sketch are end-state, not intermediate.** The `claude` label on rows
 1–3 comes from the status file, not from the process name — iTerm2 reports a *descendant*
@@ -166,7 +174,7 @@ hooks reference on 2026-08-15, and the ones that are missing are what make a row
 | `SessionStart` (`startup`, `resume`, `clear`) | a session began or was reset | `ready` |
 | `UserPromptSubmit` | a prompt was just submitted | `working` |
 | `PreToolUse` (any tool) | a tool call is starting | `working` |
-| `Notification` (`permission_prompt`, `agent_needs_input`, `elicitation_dialog`) | Claude is blocked on a human | `waiting` |
+| `Notification` (`permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog`) | Claude is blocked on a human | `waiting` |
 | `Notification` (`elicitation_complete`, `elicitation_response`) | the human answered it | `working` |
 | `PostToolUse` (any tool) | a tool ran, so a permission was granted | `working` |
 | `PermissionDenied` (any tool) | **auto mode** denied a call; the agent runs on | `working` |
@@ -192,6 +200,16 @@ completeness for its own sake:
 - **Something has to clear `waiting`.** Granting a permission fires no notification of its
   own, so without `PostToolUse` the row reads `waiting` for the rest of a turn the agent is
   actively working through.
+
+**CORRECTED 2026-08-15 (during Phase 3's implementation): `elicitation_url_dialog` was
+missing.** The reference documents nine notification types; the round-2 rebuild of this
+table read five of them into the `waiting` matcher and did not carry this one, which fires
+when an MCP server asks the human to open a browser URL and is `elicitation_dialog`'s exact
+sibling — same blocked-on-a-human meaning, same ~6 s gate. Left out, that row reads
+`working` while it waits, which is the confidently-wrong failure §2.7 rejects
+screen-scraping to avoid. Added to the table above and to the matcher. This is the third
+correction to arrive by the same route as round 2's two: **an event was reasoned about
+without its full list of types being read.**
 
 **Two endings fire nothing, and both are recorded as holes rather than papered over:**
 

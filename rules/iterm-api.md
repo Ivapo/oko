@@ -8,7 +8,7 @@ covers: >
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a
   client authorizes and how a grant is reset, the transport, the session join key, and the
   variables, operations and subscriptions Oko uses
-max_lines: 95
+max_lines: 98
 generated: 2026-08-15
 ---
 
@@ -85,7 +85,9 @@ an identifier, frame, grid size and title. Those take one `VariableRequest` per 
 escaped (`"\/tmp"`). **`jobName` is truncated to 16 bytes** (`MAXCOMLEN`):
 `rust-analyzer-proc-macro-srv` reports as `rust-analyzer-pr`. A tab is a tree of sessions,
 so enumeration recurses through `SplitTreeNode` (`src/iterm/watch.rs:flatten`); buried
-sessions belong to no window and are excluded. `ActivateRequest` with
+sessions belong to no window and are excluded from **rows** — but they are alive, so
+anything asking "does this session still exist" must add `buried_sessions` back
+(`src/iterm/watch.rs:sweep_status`). `ActivateRequest` with
 `order_window_front`, `select_tab` and `select_session` focuses a session and its tab and
 raises its window.
 Subscriptions deliver `NOTIFY_ON_VARIABLE_CHANGE` (per session *and* variable),

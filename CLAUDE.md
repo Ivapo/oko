@@ -20,9 +20,10 @@ frontmatter schema, the phase gate, the review loop; section references below (`
 
 **The observable this project produces is: a live dashboard tab showing what every other
 tab in the iTerm2 window is doing — working directory and foreground process for a plain
-tab, working / waiting for input / ready for a prompt for a Claude Code tab — and jumping
-focus to the row you press Enter on.** Every phase says whether it produces one; a phase
-that does not is argued for explicitly.
+tab, working / waiting for input / ready for a prompt for a Claude Code tab, or stale where
+the last thing reported has stopped being credible — and jumping focus to the row you press
+Enter on.** Every phase says whether it produces one; a phase that does not is argued for
+explicitly.
 
 **Before drafting or changing a spec, read `specs/INDEX.md`. Before changing a
 subsystem, read `rules/INDEX.md`.** Both are generated from frontmatter by
