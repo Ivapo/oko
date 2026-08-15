@@ -7,7 +7,7 @@ covers: >
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a
   client authorizes and how a grant is reset, the transport, the session join key, and the
   variables, operations and subscriptions Oko uses
-max_lines: 75
+max_lines: 85
 generated: 2026-08-14
 ---
 
@@ -61,12 +61,15 @@ in `build.rs` with no `protoc`.
 ## The join key
 
 **A session's `id` variable equals the UUID after the colon in `TERM_SESSION_ID`**, and
-that is what Oko joins on (`src/bin/probe.rs:report_identity`). Both fallbacks also join,
-and are kept because they make "no key at all" a real failure rather than a formality:
+that is what Oko joins on (`src/bin/probe.rs:report_identity`). It is also the same string
+`ListSessions` returns as `unique_identifier`. Both fallbacks join too:
 `tty` equals `ttyname()` of fds 0–2 — *not* of a freshly opened `/dev/tty`, a cloning
 device that answers `/dev/tty` (`src/bin/probe.rs:own_tty`) — and `termid` is
 `wNtMpK.<uuid>`, dot-separated where `TERM_SESSION_ID` uses a colon, so matching a
-position compares only the prefix.
+position compares only the prefix. **`t` is a monotonic id, not a tab position**: one
+window reported `t0 t1 t2 t3 t4 t5 t8` across seven tabs. No tab index exists anywhere in
+the API — `Tab` carries only `tab_id`, and tab scope has no index variable — though
+`Window` does carry `number`.
 
 ## Variables, operations, subscriptions
 
@@ -84,3 +87,10 @@ Subscriptions deliver `NOTIFY_ON_VARIABLE_CHANGE` (per session *and* variable),
 session created after subscribing is not covered by the per-session ones, so it must be
 subscribed when its notification arrives. `jobName` is poll-driven: a 5.000 s `sleep`
 produced its two notifications 5.602 s apart.
+
+Payloads differ in a way that decides how a client is built. `NewSessionNotification` and
+`TerminateSessionNotification` carry a `session_id` and nothing else — no window, no tab —
+so neither can place a session on its own. `LayoutChangedNotification` carries a whole
+`ListSessionsResponse`, so it delivers the new shape of every window inline; it is also
+the **only** event that fires when a tab is reordered, which creates no session,
+terminates none and changes no session variable.

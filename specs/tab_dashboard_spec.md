@@ -14,7 +14,7 @@ phases:
     cut: null
     by: null
   - name: "Phase 2 — live tab table with Enter-to-jump"
-    reviewed: null
+    reviewed: 2026-08-14
     shipped: null
     cut: null
     by: null
@@ -201,6 +201,15 @@ fallbacks also join and are recorded in `rules/iterm-api.md`, which matters beca
 makes "none of the three joins" a real failure rather than a formality — but `id` is the
 key, and Phase 3's hook writes that.
 
+**And it is one identifier, not two.** `ListSessions`' `unique_identifier` and the
+session's `id` variable carry the same string, so a row stores one id and §2.5's activate
+takes the same value the status join uses. Worth stating because the two arrive by
+different paths and an implementer holding both would be right to wonder. **The evidence
+is narrower than the claim sounds**, and the difference matters to Phase 3 rather than to
+Phase 2: the probe prints both values only for the four sessions of its own window, plus a
+mismatch diagnostic on the joined session that never fired. Four sessions and one
+assertion, not eleven.
+
 ### 2.5 Navigation
 
 Each row carries the iTerm2 session id it was built from. On Enter, Oko calls the API's
@@ -244,6 +253,26 @@ precisely the case the product exists for.
 The `tab` column therefore shows the **tab index**, and two sessions in a split tab share
 one tab index while occupying two rows. Phase 2's gate checks this directly, because a
 gate with no split in it would pass either implementation.
+
+**Where that index comes from (established 2026-08-14, during Phase 2's review round).**
+**The API exposes no tab index, so it is the 1-based position of the tab in
+`ListSessionsResponse.Window.tabs[]` and nothing else.** Two other sources are within
+reach and both are wrong. `ListSessionsResponse.Tab` carries `tab_id`, an opaque string,
+and tab scope has only `id`, `title` and the `titleOverride`/tmux fields — no index
+anywhere. The sibling `Window` message *does* carry `number`, which makes the absence look
+deliberate rather than an oversight; and the `tabIndex` and `tabNumber` symbols in the
+iTerm2 3.6.11 binary are Objective-C selectors and ivars
+(`asyncCreateTabWithProfile:…tabIndex:`, `_tabNumberForItermSessionId`), not variable
+names. And the `t` component of `termid` is a **monotonically increasing id, not a
+position**: Phase 1 observed `t0 t1 t2 t3 t4 t5 t8` across seven tabs of one window, so it
+already disagreed with the tab bar by three before anyone tried to use it.
+
+That leaves one unverified property, and it is the reason Phase 2's gate says what it
+says: **nothing has established that `tabs[]` is in tab-bar display order** rather than
+creation order or something else, and reordering tabs is the case that would tell them
+apart. So the gate compares the column against iTerm2's own tab bar rather than against
+itself — a check that two split rows merely *share* a number passes for all three
+candidate sources, including the two ruled out here.
 
 ### 2.9 Rust and ratatui (decision, recorded)
 
@@ -322,7 +351,17 @@ least likely to survive.
   whatever happens to be deepest at the instant iTerm2 sampled**, which is unstable within
   a single session, not merely across configurations. Also measured: `jobName` is
   truncated to 16 bytes (`MAXCOMLEN`), so a long name is not even reported in full.
-- **OQ-3 — Does the table refresh on a timer, or does the API push changes?** *(design
+- **OQ-3 — Does the table refresh on a timer, or does the API push changes?** **RESOLVED
+  2026-08-14, during Phase 2's review round: Oko subscribes, and does not poll.** Phase 1
+  measured every branch of this, so leaving the choice to plan mode would have been
+  leaving a settled question open — which is what §4 exists to stop, and what Phase 3's
+  scope already says in its own words. The obligations that come with the answer are
+  spelled out in Phase 2's scope, and there are **two** subscriptions rather than one:
+  per-session, per-variable ones for `path` and `jobName`, and `NOTIFY_ON_LAYOUT_CHANGE`
+  for the shape of the window — which is what carries a reorder, and what places a session
+  that `NewSessionNotification` can only announce. And a request in flight must not
+  discard a notification. The ≤1 s poll floor below is therefore moot, and is kept as the
+  record of what the fallback would have cost. *(design
   call — Phase 2)* The API supports variable-change subscriptions, so the push branch
   exists; whether it covers both variables §2.2 needs is what Phase 1's spike observes.
   If Oko polls instead, **the interval must be ≤1 s**, because Phase 2's gate is keyed to
@@ -417,27 +456,90 @@ can use.*
 
 - **Scope:**
   - A client module (`src/iterm/mod.rs` and below) wrapping Phase 1's proven transport:
-    connect, resolve Oko's own window, enumerate its sessions, subscribe or poll for
-    changes, activate a session by id.
-  - A ratatui table over those rows: tab index, process, directory (§1's sketch, without
-    the status column). Up/down selection, Enter activates, `q` quits.
-  - Rows track reality: a session opened, closed, split off, or `cd`-ed into a new
-    directory is reflected without restarting Oko (mechanism per OQ-3).
+    connect, resolve Oko's own window, enumerate its sessions, subscribe for changes,
+    activate a session by id. **Phase 1 proved the protocol, not the shape.** Its client is
+    blocking and one-shot, and Phase 2 is the first code to serve terminal input and socket
+    notifications at once, so it needs a reader thread and a channel (or an equivalent).
+    Two things Phase 1's `Client::call` does that a Phase 2 client must not: it drops any
+    frame whose id does not match the request it is waiting on — which in Phase 2 silently
+    eats a notification arriving during an activate or a variable read — and it never
+    issues a request after subscribing, so that interleaving has never run.
+  - A ratatui table over those rows: tab index (§2.8), process, directory (§1's sketch,
+    without the status column). Up/down selection, Enter activates, `q` quits. The process
+    column shows `jobName` as iTerm2 reports it, **truncated to 16 bytes** — the column
+    displays what the API gives rather than repairing it.
+  - Rows track reality: a session opened, closed, split off, **reordered**, or `cd`-ed
+    into a new directory is reflected without restarting Oko. **Mechanism: subscribe, per
+    OQ-3's resolution** — and it takes two subscriptions, not one, because the per-session
+    ones cannot see the table's shape:
+    - `NOTIFY_ON_VARIABLE_CHANGE`, per session *and* per variable, for `path` and
+      `jobName`. A session that appears later is covered only if Oko subscribes it on
+      arrival; getting that wrong yields a row that is permanently stale and looks correct.
+    - `NOTIFY_ON_LAYOUT_CHANGE` for the shape of the window, and it is the one that makes
+      the `tab` column live. **Dragging a tab creates no session, terminates none, and
+      changes no session variable**, so an implementation built only from the bullet above
+      shows a stale tab column and nothing tells it to look again. Its payload is a whole
+      `ListSessionsResponse`, so the new tab order arrives inside the notification. The
+      same path places a session that appears later, because `NewSessionNotification`
+      carries a `session_id` and nothing else — no window, no tab — so it says a session
+      exists without saying whether it is even in Oko's window.
+
+    **This puts the most weight on the least-measured notification.** Phase 1 saw
+    layout-change fire, but its recorded observations of a tab opening and closing are of
+    `NOTIFY_ON_NEW_SESSION` and `NOTIFY_ON_TERMINATE_SESSION`; that layout-change also
+    covers split and reorder is inference from its payload, not something anyone watched.
+    Checks 1, 5 and 7 fail visibly if it turns out narrower, and the remedy is one more
+    subscription rather than a redesign — so this is stated to be caught, not to be feared.
+  - **What happens when the row set changes under a selection.** Closing the selected row,
+    or any row above it, must not leave Enter pointing at a different session than the one
+    highlighted: a wrong jump is the failure §2.7 argues is worse than no answer at all.
+    Rows are ordered by tab index then position within the tab, and a session missing
+    `path` or `jobName` renders as `-` rather than as an empty or omitted row.
   - No status column, no hook machinery, no status files.
-- **Exit gate:** With four tabs in one window — an interactive `zsh` in `~/dev/main/oko`,
-  an interactive `zsh` elsewhere, `nvim`, and Oko itself — plus one of them split:
-  1. Splitting the `nvim` tab into two panes produces **five rows**, and the two rows from
-     the split tab **share one tab index** (§2.8).
-  2. Each row's directory equals `pwd` in that pane; each row's process equals the
-     basename of that pane's deepest foreground process, by the same rule and the same
-     unambiguous choice of tabs as Phase 1's gate.
-  3. `cd` in one pane, and close another tab: both rows correct **within 2 seconds**,
-     measured by stopwatch from the keystroke, with Oko never restarted.
-  4. Enter on the `nvim` row makes that tab the focused tab, and Enter on a row of the
+- **Exit gate:** **Two** windows, for the reason Phase 1's gate gives — with one window,
+  "scoped to my own window" and "listed everything" are the same output, and §1.1's
+  no-cross-window non-goal goes untested. The first holds four tabs: an interactive `zsh`
+  in `~/dev/main/oko`, an interactive `zsh` elsewhere, `nvim`, and Oko itself. The second
+  holds at least two tabs. **Oko is started before any of the checks and restarted for
+  none of them** — every check below is a liveness check, which is the whole difference
+  between this phase and Phase 1.
+  1. Splitting the `nvim` tab into two panes **while Oko is running** produces **five
+     rows**, and the two rows from the split tab **share one tab index** (§2.8).
+  2. **No row from the second window appears**, at any point during the run.
+  3. The `tab` column matches the numbering iTerm2 shows in its **own tab bar** — checked
+     after dragging a tab to a new position, which is the case that distinguishes display
+     order from creation order and the one property §2.8 leaves unverified. A check that
+     the two split rows merely share a number passes for sources §2.8 has ruled out. **If
+     it fails, stop and escalate rather than substitute a source**: §2.8 ruled the other
+     two out, so a failure here means the API offers no tab numbering that matches what a
+     human sees, and what to show in that column becomes a design question rather than an
+     implementation one.
+  4. Each row's directory equals `pwd` in that pane; each row's process equals `jobName`
+     for that pane, by the same rule and the same unambiguous choice of tabs as Phase 1's
+     gate. (Not "the basename of the deepest foreground process": that is what `jobName`
+     approximates, but it is truncated to 16 bytes, so the two differ for any longer name.
+     These tabs are chosen so they do not.)
+  5. `cd` in one pane, run a long-running command in another, and close a third tab —
+     **not the `nvim` tab and not Oko's own**, which checks 6 and 7 still need: all three
+     rows correct **within 2 seconds**, measured by stopwatch from the keystroke.
+     Both variables are exercised deliberately — the only latency Phase 1 measured is
+     `jobName`'s ~0.6 s of poll skew, and `path` has no recorded number, so this check is
+     where it gets one. Record what the stopwatch said.
+  6. Enter on the `nvim` row makes that tab the focused tab, and Enter on a row of the
      split tab focuses **that pane**, not merely the tab.
+  7. With a row selected, close the tab **above** it: the highlight still names the same
+     session it named before, and Enter jumps there rather than to a neighbour.
 - **Close-out:** seeds `rules/dashboard-ui.md` (the table, the key bindings, the refresh
-  path) and updates `rules/iterm-api.md` for anything the client learned. Resolves OQ-3
-  in §3.
+  path) and updates `rules/iterm-api.md` for anything the client learned — including
+  **re-pointing its `sources` at `src/iterm/`**, and saying whether `src/bin/probe.rs`
+  survives the phase. Left alone, that rule regenerates from a throwaway spike and the
+  linter cannot see it, because `probe.rs` still exists. It sits close to its cap — which
+  has been raised twice already as measurements landed — so the update raises it again or
+  cuts, deliberately, and says which. Resolves OQ-3 in §3. **User-facing
+  documentation is part of this phase**: Phase 2 is the first phase a human can run, and
+  there is no README — a second person needs to know how to start Oko and that the API
+  must be enabled once (`rules/iterm-api.md`). Write it or log the gap; §6 allows either,
+  and silence is not one of them.
 
 ### Phase 3 — Claude Code status from hooks
 *Produces the observable: **yes** — it completes it. The status column is the column the
