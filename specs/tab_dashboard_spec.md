@@ -29,7 +29,7 @@ phases:
     cut: null
     by: null
   - name: "Phase 5 — a stream another program can draw"
-    reviewed: null
+    reviewed: 2026-08-16
     shipped: null
     cut: null
     by: null
@@ -1426,8 +1426,9 @@ that is a fact about another repository which this document cannot assert.*
   the header contract, the omission and suppression rules, the keepalive, the exit behaviour
   and what the stream deliberately omits, and **declares its own `max_lines`** (§8.1).
   `rules/dashboard-ui.md` needs a smaller change than it looks, and getting the reason right
-  matters: **its emission paragraph is untouched** — nothing in this phase reaches
-  `emit_if_changed`, and `rules/follow-stream.md` owns everything about the stream. What does
+  matters: **its emission paragraph is untouched** — this phase *uses*
+  `emit_if_changed` and changes nothing about it, its early return included, so that paragraph
+  stays accurate; and `rules/follow-stream.md` owns everything about the stream. What does
   change is that the rule declares `src/main.rs` among its `sources`, and `src/main.rs:run`
   acquires a **second entry point** before `ratatui::init()`. That is the fact to fold in. It
   is at 109/112, so that close-out still **raises or cuts deliberately and says which**, as
