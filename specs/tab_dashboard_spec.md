@@ -5,7 +5,7 @@ note: >
   The iTerm2 dashboard tab — live per-tab directory, process and Claude Code status for
   every tab in the window, with Enter to jump to the selected one.
 status: accepted
-last_updated: 2026-08-15
+last_updated: 2026-08-16
 
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
@@ -25,7 +25,7 @@ phases:
     by: null
   - name: "Phase 4 — what a row says: a name, and how long it has said it"
     reviewed: 2026-08-15
-    shipped: null
+    shipped: 2026-08-16
     cut: null
     by: null
 
@@ -61,17 +61,21 @@ columns for a table that draws four.
 The end state, sketched — **corrected to what shipped**:
 
 ```
- Oko — window 0                                        5 rows
- ────────────────────────────────────────────────────────────
-   tab  process           status      where
- ▸ 1    claude            ● waiting   ~/dev/main/oko
-   2    claude            ◐ working   ~/dev/main/spec-driven-dev
-   3    claude            ◌ stale     ~/dev/main/mdview
-   4    nvim                          ~/dev/main/oko/src
-   5    oko                           ~/dev/main/oko
- ────────────────────────────────────────────────────────────
- ↵ jump    ↑↓ select    q quit
+ Oko — window 0                                                    5 rows
+ ────────────────────────────────────────────────────────────────────────
+   tab  name             process   status          where
+ ▸ 1    api work         claude    ● waiting >10m  ~/dev/main/oko
+   2    spec-driven-dev  claude    ◐ working       ~/dev/main/spec-driven-dev
+   3    mdview           claude    ◌ stale >30m    ~/dev/main/mdview
+   4    src              nvim                      ~/dev/main/oko/src
+   5    oko              oko                       ~/dev/main/oko
+ ────────────────────────────────────────────────────────────────────────
+ ↵ jump    ↑↓ select    r rename    q quit
 ```
+
+**CORRECTED 2026-08-16 (Phase 4's close-out).** The sketch above now carries the `name`
+column and the age, both of which Phase 4 added; row 1 is named and rows 2–5 show the derived
+default, the last component of `where`. Nothing else about it changed.
 
 Row 4 is a plain tab: it gets a process name and a directory and no status, because
 nothing reports one for it. Row 5 is Oko itself — it is a session in the window like any

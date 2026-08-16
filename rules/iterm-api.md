@@ -7,9 +7,9 @@ sources:
 covers: >
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a
   client authorizes and how a grant is reset, the transport, the session join key, and the
-  variables, operations and subscriptions Oko uses
-max_lines: 98
-generated: 2026-08-15
+  variables it reads, writes and watches, the operations and the subscriptions
+max_lines: 115
+generated: 2026-08-16
 ---
 
 # iTerm2 API
@@ -90,8 +90,22 @@ anything asking "does this session still exist" must add `buried_sessions` back
 (`src/iterm/watch.rs:sweep_status`). `ActivateRequest` with
 `order_window_front`, `select_tab` and `select_session` focuses a session and its tab and
 raises its window.
+
+**Writing a variable works on a session this process does not occupy**, measured 2026-08-15
+by `src/bin/probe.rs:var_spike` against 3.6.11 — set, read back, and a
+`NOTIFY_ON_VARIABLE_CHANGE` on the same key delivering the new value and the session id.
+`VariableRequest.set` carries `{name, value}` and **the name must begin with `user.`**, or
+iTerm2 answers `INVALID_NAME`; that is why Oko's key is `user.okoName`
+(`src/iterm/client.rs:set_variable`). The value is **raw JSON text and the caller encodes
+it** — `serde_json::Value::String(..).to_string()`, not Rust's `Debug`, which is not a JSON
+escaper. **JSON `null` unsets**, and the variable then reads back *absent* rather than as an
+empty string: `src/iterm/client.rs:decode_json_value` maps `""` to `Some("")`, so the empty
+string would be a value rather than an absence. A `user.` key can be watched exactly like a
+built-in one, which is what lets two Oko instances see one name with no protocol between
+them.
 Subscriptions deliver `NOTIFY_ON_VARIABLE_CHANGE` (per session *and* variable),
-`NOTIFY_ON_NEW_SESSION`, `NOTIFY_ON_TERMINATE_SESSION`, `NOTIFY_ON_LAYOUT_CHANGE`. A
+`NOTIFY_ON_NEW_SESSION`, `NOTIFY_ON_TERMINATE_SESSION`, `NOTIFY_ON_LAYOUT_CHANGE`.
+Oko subscribes `path`, `jobName` and `user.okoName` per session (`ROW_VARS`), plus layout. A
 session created after subscribing is not covered by the per-session ones, so it must be
 subscribed when its notification arrives. **The two variables have different latencies.**
 `jobName` is poll-driven: a 5.000 s `sleep` produced its two notifications 5.602 s apart.

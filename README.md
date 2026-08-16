@@ -4,21 +4,28 @@
 doing — and jumps to the one you press Enter on.
 
 ```
- Oko — window 0                                        5 rows
- ────────────────────────────────────────────────────────────
-   tab  process           status      where
- ▸ 1    claude            ● waiting   ~/dev/main/oko
-   2    claude            ◐ working   ~/dev/main/spec-driven-dev
-   3    claude            ◌ stale     ~/dev/main/mdview
-   3    zsh                           ~/dev/main/spec-driven-dev
-   4    oko                           ~/dev/main/oko
- ────────────────────────────────────────────────────────────
- ↵ jump    ↑↓ select    q quit
+ Oko — window 0                                                    5 rows
+ ────────────────────────────────────────────────────────────────────────
+   tab  name             process   status          where
+ ▸ 1    api work         claude    ● waiting >10m  ~/dev/main/oko
+   2    spec-driven-dev  claude    ◐ working       ~/dev/main/spec-driven-dev
+   3    mdview           claude    ◌ stale >30m    ~/dev/main/mdview
+   3    spec-driven-dev  zsh                       ~/dev/main/spec-driven-dev
+   4    oko              oko                       ~/dev/main/oko
+ ────────────────────────────────────────────────────────────────────────
+ ↵ jump    ↑↓ select    r rename    q quit
 ```
 
 One row per **session**, not per tab: a split tab is two rows sharing one tab number, and
 Oko's own session is a row like any other. The table is live — a `cd`, a command starting,
 a tab opened, closed, split or dragged all show up without restarting anything.
+
+**Every row has a name**, because `where` tells three agents apart only when their
+directories happen to differ — and running several agents in one repository is exactly when
+they do not. Un-named, a row shows the last component of its directory and follows a `cd`,
+because that is a description of where it is rather than a name. Press `r` to give it a real
+one; that sticks through any later `cd`, and lives on the iTerm2 session, so it survives
+restarting Oko and dies with the pane.
 
 The `status` column is the reason the tool exists: with three agents running, it says which
 one is blocked without your visiting all three.
@@ -30,11 +37,21 @@ one is blocked without your visiting all three.
 | `○ ready` | the turn is over; it wants a prompt |
 | `◌ stale` | it *said* `working`, and has said nothing since. Oko does not know |
 
+Each carries **how long it has said so** — nothing under five minutes, then `>5m`, `>10m`,
+`>30m`, `>1h`. `● waiting >10m` is how long you have been blocking it; `○ ready >1h` is how
+long you have been ignoring it. Buckets rather than a live counter, so a dashboard that sits
+in a tab all day redraws a handful of times, not once a second.
+
 `stale` is the honest answer to a case nothing reports: pressing Esc to interrupt a turn
 fires no hook at all, so the last thing Oko heard was `working`. After
 `OKO_STALE_AFTER` (default 10 minutes) the row stops claiming it. `waiting` and `ready`
 never go stale — an agent that has been waiting twenty minutes is exactly the thing you
 want to see, and `ready` is legitimately hours old.
+
+**A tool still running is not silence.** If the hook recorded a tool that has not finished,
+the row ages against `OKO_TOOL_STALE_AFTER` (default 45 minutes) instead, so a quiet
+fifteen-minute build reports `◐ working >10m` rather than going stale mid-work. It is a
+longer clock and not an exemption: an agent killed mid-tool still gives up eventually.
 
 **Requirements:** macOS, [iTerm2](https://iterm2.com) 3.6 or later, and a Rust toolchain to
 build. The status column additionally needs [Claude
@@ -98,6 +115,7 @@ leave open.
 |---|---|
 | `↑` `↓` (or `k` `j`) | move the selection |
 | `Enter` | focus that session — its pane, its tab, its window |
+| `r` | rename the selected row — `Enter` commits, `Esc` cancels, `^U` clears |
 | `q` / `Esc` | quit |
 
 Enter changes which tab is focused and nothing else: nothing is typed into the target pane.
@@ -135,8 +153,8 @@ Oko was built spec-first, and the documents are part of the repo rather than an 
 
 - **[`specs/`](specs/)** — *why* each decision was made, and the plan. Append-only once
   accepted, so a wrong turn stays visible with the correction beside it.
-  [`specs/reviews/oko-001.md`](specs/reviews/oko-001.md) is the review record: nine rounds
-  across three phases, every blocking finding and what it cost.
+  [`specs/reviews/oko-001.md`](specs/reviews/oko-001.md) is the review record: twelve rounds
+  across four phases, every blocking finding and what it cost.
 - **[`rules/`](rules/)** — *what is true right now*, tracking the code and corrected against
   it. [`iterm-api.md`](rules/iterm-api.md) is the one worth reading if you want to talk to
   iTerm2 yourself: the endpoint, the authorization dance, the join key, and the measured

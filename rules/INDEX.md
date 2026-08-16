@@ -2,9 +2,9 @@
 
 # Rules
 
-- **[claude-status](claude-status.md)** — generated 2026-08-15 · 3 sources · 92/95 lines
-  how a Claude Code tab reports what it is doing — the hook binary and the events it answers to, the status file's path and format, the identity join to a row, what deletes a file and what ages a value out, and the holes that remain
-- **[dashboard-ui](dashboard-ui.md)** — generated 2026-08-15 · 4 sources · 70/73 lines
-  the dashboard Oko draws — its columns and where each value comes from, the keys it answers to, how a selection survives a changing row set, and the path by which rows track the window without polling
-- **[iterm-api](iterm-api.md)** — generated 2026-08-15 · 3 sources · 95/98 lines
-  how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables, operations and subscriptions Oko uses
+- **[claude-status](claude-status.md)** — generated 2026-08-16 · 3 sources · 121/124 lines
+  how a Claude Code tab reports what it is doing — the hook binary and the events it answers to, the status file's path and format, the identity join to a row, the two clocks a value ages on, what deletes a file, and the holes that remain
+- **[dashboard-ui](dashboard-ui.md)** — generated 2026-08-16 · 4 sources · 109/112 lines
+  the dashboard Oko draws — its columns and where each value comes from, the keys it answers to, the one modal state it has, how a selection survives a changing row set, and the path by which rows track the window without polling
+- **[iterm-api](iterm-api.md)** — generated 2026-08-16 · 3 sources · 109/115 lines
+  how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables it reads, writes and watches, the operations and the subscriptions

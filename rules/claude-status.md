@@ -6,10 +6,10 @@ sources:
   - src/iterm/watch.rs
 covers: >
   how a Claude Code tab reports what it is doing — the hook binary and the events it
-  answers to, the status file's path and format, the identity join to a row, what deletes a
-  file and what ages a value out, and the holes that remain
-max_lines: 95
-generated: 2026-08-15
+  answers to, the status file's path and format, the identity join to a row, the two clocks
+  a value ages on, what deletes a file, and the holes that remain
+max_lines: 124
+generated: 2026-08-16
 ---
 
 # Claude status
@@ -29,7 +29,8 @@ in shell needs `jq`.
 |---|---|
 | `SessionStart` (`startup`, `resume`, `clear`) | `ready` |
 | `UserPromptSubmit` | `working` |
-| `PreToolUse` (`*`), `PostToolUse` (`*`) | `working` |
+| `PreToolUse` (`*`) | `working`, **and the tool's name** |
+| `PostToolUse` (`*`) | `working`, tool cleared |
 | `PermissionDenied` (`*`) — **auto mode** denied a call; the agent runs on | `working` |
 | `Notification` (`permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog`) | `waiting` |
 | `Notification` (`elicitation_complete`, `elicitation_response`) | `working` |
@@ -63,6 +64,11 @@ directory (`src/status.rs:write`) — Oko reads it concurrently, and the rename 
 moves the directory's mtime.
 
     {"iterm_session_id":"F79BC…","claude_session_id":"…","status":"working","at":"…Z"}
+    {…,"status":"working","at":"…Z","tool":"Bash"}      ← PreToolUse only
+
+`tool` is **absent** rather than null when there is none, so every file Phase 3 wrote still
+reads: `src/status.rs:Entry::from_json` takes it through an optional accessor, not the
+required-field closure the other four use.
 
 The join key is the UUID after the colon in `TERM_SESSION_ID`, then `ITERM_SESSION_ID` —
 the same two names in the same order as `src/iterm/watch.rs:resolve_own_session`. **A pane
@@ -83,11 +89,34 @@ against `src/iterm/watch.rs:Row.session_id`, never a process name.
    against those would destroy Claude tabs' status in other windows, and two Okos would
    delete each other's files continuously. **Buried sessions count as alive.** It runs in
    `rescan`, the only place a closing tab produces an event, and covers a `kill -9`.
-3. `working` older than `OKO_STALE_AFTER` (default 10 min, `src/status.rs:stale_after`)
-   renders `◌ stale`. **`waiting` and `ready` never age** — an agent waiting twenty minutes
-   is the answer the product exists to give, and `ready` is legitimately hours old. A quiet
-   fifteen-minute build does go stale mid-work; the failure direction is "I don't know"
-   rather than a confident wrong answer.
+3. `working` older than its threshold renders `◌ stale`. **`waiting` and `ready` never age**
+   — an agent waiting twenty minutes is the answer the product exists to give, and `ready` is
+   legitimately hours old.
+
+## The two clocks, and the ladder
+
+Which threshold a `working` expires on is the one thing `tool` decides
+(`src/status.rs:Entry::shown`). Without one, `OKO_STALE_AFTER` — 10 minutes. With one,
+`OKO_TOOL_STALE_AFTER` — **45 minutes**, because a tool in flight is not silence: a quiet
+fifteen-minute build reports `◐ working >10m` rather than `◌ stale`.
+
+**`PreToolUse` sets the field and every other event clears it.** That rule is total over the
+table above by construction — `src/status.rs:write` builds a whole `Entry` and renames it, so
+there is no "leave this field alone" — and it stays total when a row is added. It is safe
+because the field is consulted only on `working`, and the other statuses never age.
+
+**45 is off the ladder deliberately** (OQ-6). At 30 minutes or 1 hour the bucket fires at the
+same instant staleness does and that rung can never render; off it, a long build legibly
+climbs `>5m` → `>10m` → `>30m` first. The ladder itself (`src/status.rs:Age`) is `None` under
+five minutes, then `>5m`, `>10m`, `>30m`, `>1h`, and every status carries it — one clock with
+one meaning, `now - at`. Buckets rather than seconds because a live counter would redraw the
+table every second forever.
+
+**One tool slot, and it degrades off.** Parallel calls mean the first `PostToolUse` clears
+the field while the others run, and the row falls back to the 10-minute clock — Phase 3's
+behaviour, not a wrong answer. Pressing Esc *during* a tool leaves it outstanding, so that
+row claims `working` for up to the longer threshold; the next `UserPromptSubmit` corrects it
+within seconds, which is why interrupt-then-walk-away is the accepted cost.
 
 ## Holes, stated
 
