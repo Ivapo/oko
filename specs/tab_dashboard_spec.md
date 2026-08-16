@@ -28,6 +28,11 @@ phases:
     shipped: 2026-08-16
     cut: null
     by: null
+  - name: "Phase 5 — a stream another program can draw"
+    reviewed: null
+    shipped: null
+    cut: null
+    by: null
 
 extends: null
 supersedes: null
@@ -502,6 +507,47 @@ tool call rarely lands inside the one second before the Esc — but that is a ti
 likelihood rather than a guarantee, and if a `PreToolUse` does land in that window the check
 fails for this reason rather than a real defect.
 
+### 2.13 A stream, not a library (decision, recorded — added by Phase 5)
+
+Oko's rows are useful to something other than Oko. The first consumer is **panex-tui**, the
+terminal build of PanEx (`~/dev/main/panex/crates/panex-tui`), which wants to draw them as
+cards behind a keyboard shortcut. Both programs are Rust, and `src/lib.rs` already exposes
+`iterm` and `status`, so panex-tui *could* depend on the `oko` crate and call
+`Watcher::connect` directly — no subprocess, no serialization, no second API client.
+
+**That is rejected, and the reason is a requirement rather than a preference.** The feature is
+meant to degrade to nothing: a person running panex-tui without Oko installed should see no
+card view and no error. A compile-time dependency is always present, so there would be no
+absence to degrade to. Wanting the feature to be optional is what forces a separate process
+and a serialized interface; it is not an implementation detail that happened to be chosen.
+
+So the coupling is **one JSON stream, in one direction**, and the whole contract is two facts:
+that a binary named `oko` may be on `PATH`, and the shape of the lines it writes. Neither
+program links the other. This is deliberately the same shape as §2.3's coupling with Claude
+Code — one directory of small files, one direction — and for the same reason: the failure mode
+is a consumer that sees nothing, which is visible, rather than one that sees something wrong.
+
+**Two constraints this design gets for free, and both would have been real problems for the
+Tauri build of PanEx rather than the terminal one.** panex-tui runs in an iTerm2 pane, so a
+child it spawns inherits `TERM_SESSION_ID` and `src/iterm/watch.rs:resolve_own_session` works
+unchanged — the stream is scoped to panex-tui's own window, and §1.1's no-cross-window
+non-goal is untouched. And that child sits inside iTerm2's process tree, so macOS attributes
+its `osascript` call to iTerm2 and no Automation grant is involved (`rules/iterm-api.md`).
+A GUI process spawning Oko from outside iTerm2 has neither property, which is why **this phase
+is scoped to panex-tui and a card view in the Tauri app is not in it.**
+
+**Two Oko instances in one window are already safe**, which this design needs and did not have
+to arrange: §2.10 turns on two instances seeing one `user.okoName` with no sync protocol, and
+OQ-4 (b) scopes the status sweep to the whole `ListSessions` response *precisely* so two Okos
+do not delete each other's files. A dashboard tab and a panex-tui card view can therefore run
+side by side. That fell out of Phases 3 and 4 without this use case in mind.
+
+**What Oko does not do here.** It does not spawn panex-tui, know panex-tui exists, or change
+behaviour when one is watching. §1.1's non-goals hold: the stream observes and reports, and
+nothing in it lets a consumer act on a session except by reading. §2.6 rejected a side panel
+because a split pane lives in one tab and would need one copy per tab; a separate program
+reading a stream is not that, so that argument does not reach this.
+
 ## 3. Open questions
 
 - **OQ-1 — How does a Rust binary reach the iTerm2 API?** **RESOLVED 2026-08-14 by Phase
@@ -730,6 +776,41 @@ fails for this reason rather than a real defect.
   review whether a second threshold is even the right shape, or whether the tool's *name*
   should render instead — `◐ working (Bash) >10m` says more than any threshold does, and a
   human reading it can judge for themselves whether twenty minutes of `Bash` is plausible.~~
+
+- **OQ-7 — What does the stream do about a change no consumer would draw?**
+  *(design call — blocks Phase 5)* Phase 4 measured this and it is not hypothetical: `Snapshot`
+  equality compares `Row.process`, which a row carrying a status never draws — `src/ui.rs`
+  renders the literal `claude` — so an iTerm2 `jobName` re-sample emits a snapshot that renders
+  identically. **Anything run in a watched pane moves that pane's deepest foreground job**, and
+  a shell loop calling `sleep` once a second produced a *pair* of emissions every ~1.9 s, some
+  fifty a minute, with nothing changing on screen (2026-08-16, `rules/dashboard-ui.md`). A
+  stream inherits that directly: panex-tui spawning Oko is itself an event in a watched pane.
+  Candidates, not exclusive: emit every snapshot and let consumers dedupe; suppress a line
+  whose serialized form matches the last one sent; or omit `process` from the schema for rows
+  carrying a status, which removes the churn at its source but bakes OQ-2's display rule into
+  the interface. **The third is the one to argue about**, because it decides whether the
+  schema describes what Oko knows or what a table draws.
+- **OQ-8 — Does a JSON stream actually make the test harness hermetic, or only cheap?**
+  *(answerable from code now — answer during Phase 5's review)* Phase 4 cut the pty harness and
+  parked it here with the justification that "a JSON stream makes every assertion cheap and
+  hermetic". **Half of that looks wrong and should be checked before it is inherited.**
+  Asserting on a line of JSON is certainly cheaper than asserting on terminal bytes, but
+  producing that line still requires `src/iterm/watch.rs:Watcher::connect`, a live API, an
+  enabled socket and a joining pane — which is exactly the hermeticity objection that cut the
+  harness in the first place, and `src/main.rs:run` still calls `connect` unconditionally. If
+  the harness is to be hermetic it needs a **seam**, and naming that seam is the real work:
+  a trait over the client, a recorded transcript replayed from a file, or a `Watcher`
+  constructed from a fixture `ListSessionsResponse`. If no seam is worth its cost, say so and
+  keep the tests live-only — but do not carry the word "hermetic" forward unexamined.
+- **OQ-9 — How does a consumer discover an Oko it cannot speak to?**
+  *(design call — blocks Phase 5)* The schema becomes a published interface the moment a second
+  program reads it, and the two versions then drift independently — panex-tui is released on
+  its own cadence and `cargo install` is not a coordinated upgrade. Something has to carry a
+  version, and something has to decide what a consumer does with one it does not recognise.
+  The cheap answer is a first line naming the schema number, and a consumer that shows nothing
+  rather than mis-rendering — the same "visible absence beats a confident wrong answer" that
+  §2.7 turns on. Worth settling **whether the version is per stream or per line**, because a
+  long-lived stream outlives the process that decided to trust it.
 
 ## 4. Implementation phases
 
@@ -1153,3 +1234,93 @@ once, which is exactly when they often do not.*
   §3. §1's sketch acquires a name column and an age, and the `CLAUDE.md` observable line is
   re-read to see whether it still describes what ships — this phase adds no status value, so
   it may not need touching, and "checked, no change needed" is the answer to record if so.
+
+### Phase 5 — a stream another program can draw
+*Produces the observable: **no**, and this is the argument — the second phase of five that
+does not, and it is the same argument Phase 1 made. The visible payoff is a card view inside
+panex-tui, which is a different repository and a different document; this phase's own output
+is an interface and the tests that hold it still. That is exactly the shape §3 warns about —
+a well-reviewed thing nobody consumes — so the risk is named rather than waved through:
+**if panex-tui's card view is never built, Oko carries a JSON mode with no reader.** The
+mitigation is in the gate, which requires the stream to be consumed end to end by something
+that is not Oko rather than merely emitted. It is also why this phase is small: it adds a
+mode, not a feature.*
+
+- **Scope:**
+  - **`oko --follow`** (`src/main.rs:run`, a new module or `src/ui.rs`'s sibling). One JSON
+    object per line on stdout, newline-delimited. **The branch is taken before
+    `ratatui::init()`**, and nothing in this mode touches the terminal: no alternate screen,
+    no key handling, no footer. Stdout is the data channel, so the only thing that may ever be
+    written to it is a line of JSON — errors already go to stderr through `src/main.rs:main`.
+  - **The emission point is the one that exists.** `src/iterm/watch.rs:Watcher::run` already
+    takes `emit: impl FnMut(Event) -> bool`, and `src/iterm/watch.rs:emit_if_changed` is
+    already the single place a change is published. `--follow` supplies a different closure —
+    serialize and write — and adds no second source of truth. **This is the phase's whole
+    structural claim, and it is why the phase is small**: the hard part shipped in Phase 2.
+  - **Exit when the reader goes away.** The `emit` closure returning `false` already means
+    "the consumer is gone" and already stops `Watcher::run`; a failed write returns exactly
+    that. So a panex-tui that dies, or closes the pipe, stops its Oko rather than orphaning a
+    process holding a socket. **Rust ignores `SIGPIPE` by default**, so this rests on the
+    write error being observed rather than on a signal, and the gate checks it.
+  - **The schema** — one object per snapshot, carrying `window_number` and a `rows` array
+    built from `src/iterm/watch.rs:Row`. Three decisions inside it, each with a reason:
+    - **`age` is the bucket, never seconds.** Seconds would make every line differ every
+      second and destroy §2.11's quietness at the interface — the same defect the ladder
+      exists to prevent, wearing a serializer's hat.
+    - **`status` is the effective one** — what a row shows, `stale` included — because
+      `src/status.rs:Status::Stale` is derived at read time and a consumer given the written
+      value would have to re-implement two clocks to get it right.
+    - **`process` and the `claude` question** is OQ-7's, and the schema cannot be written
+      until it is settled: the table substitutes a literal at draw time
+      (`src/ui.rs:render_row`) and an interface that does the same is describing a table
+      rather than a window.
+    - Plus whatever OQ-9 settles about a version marker.
+  - **The consumer's half is not in this phase.** The shortcut, the card layout, the
+    absent-binary behaviour and the process lifetime on panex-tui's side belong to panex,
+    which is a separate repository and **is not spec-driven today** — it has a `CLAUDE.md`
+    and no `specs/` or `rules/`. Whether it adopts the methodology first is a decision for
+    that repo, recorded here only so the boundary is not assumed away.
+  - **A test harness, per OQ-8** — and its scope is that question's answer, not this bullet's
+    assumption. If a seam is worth its cost there is a `tests/` tree and a fixture; if not,
+    the tests stay live-only and say so.
+  - No card layout, no rendering of any kind, **no `--once`** unless the gate turns out to
+    need it, and nothing that lets a consumer act on a session. The stream reports.
+- **Exit gate:** **One window**: a plain `zsh` tab, a Claude Code tab, an `oko` dashboard tab,
+  and the tab the stream is read from. Run the dashboard with `OKO_DEBUG_EMITS=1` so checks 1
+  and 5 can be told apart from each other.
+  1. **The stream is quiet.** With every session idle and no age bucket due,
+     `oko --follow > /tmp/f` writes **no lines for 60 seconds**. Measured with Phase 4's
+     discipline and its trap: **do nothing in any tab of that window**, because anything run
+     in a watched pane moves its `jobName` — the failure that cost Phase 4's gate three runs
+     (OQ-7, `rules/dashboard-ui.md`).
+  2. **The stream is live.** `cd` in the plain tab: one line appears within 2 seconds, and its
+     `path` and derived `name` are the new ones.
+  3. **It agrees with the table.** For every row, `tab`, `name`, `status` and `path` in the
+     JSON match what the dashboard tab draws at the same moment. This is the check that fails
+     an implementation which rebuilds the view instead of reusing `emit_if_changed`.
+  4. **Ages are buckets.** A row older than five minutes carries `>5m` and not a second count,
+     and the line does **not** change while the row sits inside one bucket.
+  5. **Closing the reader stops the writer.** Kill the reading process, or close the pipe:
+     within 5 seconds the `oko --follow` process is gone — checked with `ps`, not inferred —
+     and the dashboard Oko in the same window is **still running**.
+  6. **Stdout carries nothing but JSON.** Every line of `/tmp/f` parses. Turn the API off and
+     start it again: the failure goes to **stderr**, stdout stays empty, and the exit status
+     is non-zero.
+  7. **A real consumer reads it**, and this is the check the observable argument above rests
+     on: something that is not Oko — panex-tui if it is ready, otherwise a scripted reader —
+     consumes the stream and renders or asserts on at least `name` and `status` for every row.
+     A stream nothing has ever read is not an interface, it is a guess.
+  8. **A rename crosses the process boundary.** Press `r` in the dashboard tab and commit a
+     name: the stream emits a line carrying it. Two processes, one `user.okoName`, no protocol
+     between them — §2.10's claim, observed across a boundary Phase 4 never tested.
+  9. **The unknown-version path**, per OQ-9's resolution: a consumer shown a schema it does not
+     recognise reports that rather than rendering a partial row.
+- **Close-out:** seeds a new rule for the interface — `rules/follow-stream.md`, not a section
+  of `rules/dashboard-ui.md`, whose `covers` is the dashboard Oko *draws* and which would be
+  describing two different products. It records the schema, the version contract, the exit
+  behaviour, and what the stream deliberately omits. Updates `rules/dashboard-ui.md` only where
+  `--follow` changes something about the drawn table, which may be nothing. `README.md` gains
+  the mode and — depending on OQ-9 — what a consumer is promised. Resolves OQ-7, OQ-8 and OQ-9
+  in §3. **The `CLAUDE.md` observable line is re-read**: this phase adds a second surface for
+  the same observable rather than a new one, so "checked, no change needed" is a likely and
+  legitimate answer. Commit plan and reconciliation step are stated in the phase's plan.
