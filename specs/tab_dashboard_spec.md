@@ -778,12 +778,26 @@ reading a stream is not that, so that argument does not reach this.
   human reading it can judge for themselves whether twenty minutes of `Bash` is plausible.~~
 
 - **OQ-7 — What does the stream do about a change no consumer would draw?**
+  **RESOLVED 2026-08-16, during Phase 5's review round: the schema carries `job` only on rows
+  that have no status, and the writer suppresses a line identical to the one before it.**
+  Both halves are needed and they answer different things. A row carrying a status has a
+  `jobName` that is (a) never displayed — `src/ui.rs:render_row` substitutes the literal
+  `claude` — (b) already ruled inadmissible as identity by OQ-2, and (c) measured *unstable
+  within a single session*: `node` on two tabs and `rust-analyzer-pr` on two others, whatever
+  was deepest at the instant iTerm2 sampled. Emitting it would export instability rather than
+  information, so such a row carries `claude: true` and no `job`. **That is not the table's
+  display rule leaking into the interface**, which is what made the third candidate look
+  suspect: it is the interface declining to publish a field its own spec says is untrustworthy
+  for those rows. A row *without* a status still carries `job` verbatim, truncation and all,
+  because there it is the value and the only one. The suppression rule then covers what
+  remains — a field moving and moving back, a snapshot rebuilt identically — and makes the
+  stream's quietness a property of the writer rather than a hope about the reader.
   *(design call — blocks Phase 5)* Phase 4 measured this and it is not hypothetical: `Snapshot`
   equality compares `Row.process`, which a row carrying a status never draws — `src/ui.rs`
   renders the literal `claude` — so an iTerm2 `jobName` re-sample emits a snapshot that renders
   identically. **Anything run in a watched pane moves that pane's deepest foreground job**, and
-  a shell loop calling `sleep` once a second produced a *pair* of emissions every ~1.9 s, some
-  fifty a minute, with nothing changing on screen (2026-08-16, `rules/dashboard-ui.md`). A
+  a shell loop calling `sleep` once a second produced a *pair* of emissions every ~1.9 s — some
+  sixty a minute, with nothing changing on screen (2026-08-16, `rules/dashboard-ui.md`). A
   stream inherits that directly: panex-tui spawning Oko is itself an event in a watched pane.
   Candidates, not exclusive: emit every snapshot and let consumers dedupe; suppress a line
   whose serialized form matches the last one sent; or omit `process` from the schema for rows
@@ -791,7 +805,20 @@ reading a stream is not that, so that argument does not reach this.
   the interface. **The third is the one to argue about**, because it decides whether the
   schema describes what Oko knows or what a table draws.
 - **OQ-8 — Does a JSON stream actually make the test harness hermetic, or only cheap?**
-  *(answerable from code now — answer during Phase 5's review)* Phase 4 cut the pty harness and
+  **RESOLVED 2026-08-16, during Phase 5's review round: only cheap. The word does not survive,
+  and the pty harness is retired rather than inherited again.** Verified against the code:
+  `src/main.rs:run` calls `Watcher::connect` unconditionally and `src/iterm/client.rs:Client`
+  is a concrete type, so producing a single line still needs an enabled socket, a cookie and a
+  joining pane. A seam that removed that — a trait over the client, or a `Watcher` built from a
+  fixture `ListSessionsResponse` — is a refactor of the one component every shipped phase rests
+  on, undertaken to test a mode with one consumer. **That is disproportionate and this phase
+  does not do it.** What it does instead is cheaper and aimed at where the risk actually is:
+  **serialization is a pure function from `Snapshot` to a line**, so the schema, the version
+  header, the omission rule and the suppression rule are all covered by ordinary unit tests in
+  the crate with no iTerm2 at all, and the live half — connect, subscribe, exit — is what the
+  exit gate is for. Phase 4 parked the harness here on a justification that was half wrong;
+  recording that is worth more than carrying it to a sixth phase.
+  *(answerable from code now — answered during Phase 5's review)* Phase 4 cut the pty harness and
   parked it here with the justification that "a JSON stream makes every assertion cheap and
   hermetic". **Half of that looks wrong and should be checked before it is inherited.**
   Asserting on a line of JSON is certainly cheaper than asserting on terminal bytes, but
@@ -803,6 +830,17 @@ reading a stream is not that, so that argument does not reach this.
   constructed from a fixture `ListSessionsResponse`. If no seam is worth its cost, say so and
   keep the tests live-only — but do not carry the word "hermetic" forward unexamined.
 - **OQ-9 — How does a consumer discover an Oko it cannot speak to?**
+  **RESOLVED 2026-08-16, during Phase 5's review round: one header line per stream, and a
+  consumer that does not recognise the schema renders nothing and says so.** The first line
+  written is `{"oko":"<crate version>","schema":1}`; every line after it is a snapshot. **Per
+  stream rather than per line**, which was the sub-question: the schema cannot change inside a
+  stream, because a stream is one process and one build, so a per-line marker would pay bytes
+  on every line forever to answer a question that is settled at connect. The worry that "a
+  long-lived stream outlives the process that decided to trust it" does not apply for the same
+  reason — the stream *is* the process; upgrading Oko does not change what a running one
+  speaks, and the next launch presents a new header. A consumer meeting an unknown `schema`
+  shows nothing rather than a partial row, which is §2.7's principle one layer out: absence is
+  visible, a confidently wrong card is not.
   *(design call — blocks Phase 5)* The schema becomes a published interface the moment a second
   program reads it, and the two versions then drift independently — panex-tui is released on
   its own cadence and `cargo install` is not a coordinated upgrade. Something has to carry a
@@ -1239,88 +1277,163 @@ once, which is exactly when they often do not.*
 *Produces the observable: **no**, and this is the argument — the second phase of five that
 does not, and it is the same argument Phase 1 made. The visible payoff is a card view inside
 panex-tui, which is a different repository and a different document; this phase's own output
-is an interface and the tests that hold it still. That is exactly the shape §3 warns about —
-a well-reviewed thing nobody consumes — so the risk is named rather than waved through:
-**if panex-tui's card view is never built, Oko carries a JSON mode with no reader.** The
-mitigation is in the gate, which requires the stream to be consumed end to end by something
-that is not Oko rather than merely emitted. It is also why this phase is small: it adds a
-mode, not a feature.*
+is an interface and the tests that hold its schema still. That is exactly the shape §3 warns
+about — a well-reviewed thing nobody consumes — so the risk is named rather than waved
+through: **if panex-tui's card view is never built, Oko carries a JSON mode with no reader.**
+Gate check 7 requires the stream to be consumed end to end by something that is not Oko, but
+**that check closes the gate, not the risk**: a reader written for the gate proves the
+interface is usable, not that anyone wants it. The risk closes when panex-tui reads it, and
+that is a fact about another repository which this document cannot assert.*
 
 - **Scope:**
-  - **`oko --follow`** (`src/main.rs:run`, a new module or `src/ui.rs`'s sibling). One JSON
-    object per line on stdout, newline-delimited. **The branch is taken before
-    `ratatui::init()`**, and nothing in this mode touches the terminal: no alternate screen,
-    no key handling, no footer. Stdout is the data channel, so the only thing that may ever be
-    written to it is a line of JSON — errors already go to stderr through `src/main.rs:main`.
+  - **`oko --follow`** (`src/main.rs:run`, and a serializer beside `src/ui.rs`). Newline-
+    delimited JSON on stdout. **The branch is taken before `ratatui::init()`**, and nothing in
+    this mode touches the terminal: no alternate screen, no key handling, no footer.
   - **The emission point is the one that exists.** `src/iterm/watch.rs:Watcher::run` already
     takes `emit: impl FnMut(Event) -> bool`, and `src/iterm/watch.rs:emit_if_changed` is
-    already the single place a change is published. `--follow` supplies a different closure —
-    serialize and write — and adds no second source of truth. **This is the phase's whole
-    structural claim, and it is why the phase is small**: the hard part shipped in Phase 2.
-  - **Exit when the reader goes away.** The `emit` closure returning `false` already means
-    "the consumer is gone" and already stops `Watcher::run`; a failed write returns exactly
-    that. So a panex-tui that dies, or closes the pipe, stops its Oko rather than orphaning a
-    process holding a socket. **Rust ignores `SIGPIPE` by default**, so this rests on the
-    write error being observed rather than on a signal, and the gate checks it.
-  - **The schema** — one object per snapshot, carrying `window_number` and a `rows` array
-    built from `src/iterm/watch.rs:Row`. Three decisions inside it, each with a reason:
-    - **`age` is the bucket, never seconds.** Seconds would make every line differ every
-      second and destroy §2.11's quietness at the interface — the same defect the ladder
-      exists to prevent, wearing a serializer's hat.
-    - **`status` is the effective one** — what a row shows, `stale` included — because
-      `src/status.rs:Status::Stale` is derived at read time and a consumer given the written
-      value would have to re-implement two clocks to get it right.
-    - **`process` and the `claude` question** is OQ-7's, and the schema cannot be written
-      until it is settled: the table substitutes a literal at draw time
-      (`src/ui.rs:render_row`) and an interface that does the same is describing a table
-      rather than a window.
-    - Plus whatever OQ-9 settles about a version marker.
+    already the single place a change is published. `--follow` supplies a different closure and
+    adds no second view-building path. Two things an implementer must get right, both of which
+    a plausible reading gets wrong:
+    - **`Watcher::run` also takes `cmds: &Receiver<Cmd>` and returns immediately on
+      `Err(TryRecvError::Disconnected)`.** There is no UI here to hold the sender, so
+      `--follow` must keep one alive for the life of the process or it exits before writing
+      anything.
+    - **The opening snapshot has no path through `emit_if_changed`.**
+      `src/iterm/watch.rs:connect` ends with `self.emitted = self.snapshot()`, so the state at
+      connect can never be published as a difference — the dashboard gets it separately, via
+      `src/main.rs:run`'s `let initial = watcher.snapshot()`. **`--follow` writes that same
+      snapshot as its first data line**, or a panex-tui that spawns Oko behind a shortcut draws
+      an empty card view until something happens to move.
+  - **Detection that the reader is gone, and what actually bounds it.** `emit` returning
+    `false` already stops `Watcher::run`, and a failed write to a closed pipe returns exactly
+    that — Rust ignores `SIGPIPE`, so this rests on the write error, which is observed rather
+    than signalled. **But `emit` is only called when something changed**, and §2.11 designs
+    emissions to happen a handful of times a day, so a reader that closes the pipe and stays
+    alive would otherwise leave an orphan holding a socket indefinitely.
+    So `--follow` spawns **one thread that writes a bare newline to stdout every five seconds**
+    and, when that write fails, calls `std::process::exit` — a closed pipe is detected within
+    one interval. Two properties make so blunt an exit correct *here specifically*: this mode
+    owns no alternate screen, so there is no terminal state a teardown would have to restore
+    (`ratatui::restore` is on the dashboard path only), and `src/main.rs:run` already spawns
+    the watcher with `thread::spawn` and never joins it, so an abrupt end is what this program
+    already does.
+    **The keepalive is deliberately *not* delivered through `Event`, and that is the whole
+    point.** A tick routed through `src/iterm/watch.rs:Event` would reach `src/ui.rs:run`,
+    whose `terminal.draw` sits **outside** the action match and is therefore unconditional —
+    `Action::Redraw` is a no-op arm precisely because the draw is not optional — so the
+    dashboard would redraw ten times a second, forever. That is §2.11's stated defect at ten
+    times the rate the section rejects, and **nothing in the corpus would catch it**: Phase 4's
+    check 9 counts `~/.oko/emits.log`, and `src/iterm/watch.rs:log_emit` sits *after*
+    `emit_if_changed`'s early return, so ticks would never be logged and the count would look
+    right while the table redrew continuously.
+    Keeping the keepalive local to `--follow` means **this phase modifies neither `src/ui.rs`
+    nor the dashboard's path through `src/main.rs:run`** — it adds a branch beside it. That is
+    why Phase 4's check 9 cannot regress here, and why no gate check below needs to re-run it.
+    **This is not the timer §2.11 refuses**, on a stronger footing than a shared tick would
+    have had: the thread renders nothing, carries no row content, and exists only in a mode
+    that has a pipe. The table §2.11 is about is untouched. It exists because **the stream has
+    a failure mode the dashboard does not — a consumer can vanish silently**, where a human
+    closing the dashboard closes the process with it. The cost is stated rather than hidden:
+    a consumer is woken twelve times a minute, forever, by a program built to sit in a tab all
+    day. That is the price of bounding the orphan, and it is paid in one byte.
+  - **The schema**, per OQ-7 and OQ-9. A header line `{"oko":"…","schema":1}`, then one object
+    per snapshot carrying `window_number` and `rows` built from `src/iterm/watch.rs:Row`:
+    `session_id`, `tab`, `name`, `path`, `status`, `age`, and either `claude: true` (a row
+    carrying a status) or `job` (a row without one — verbatim, 16-byte truncation and all).
+    - **`age` is the bucket, never seconds.** Seconds would make every line differ every second
+      and destroy §2.11's quietness at the interface.
+    - **`status` is the effective one**, `stale` included, because `src/status.rs:Status::Stale`
+      is derived at read time and a consumer given the written value would have to re-implement
+      two clocks to get it right.
+    - A line identical to the one before it is not written (OQ-7).
+    - **`serde_json::json!` builds it**, exactly as `src/status.rs:Entry::to_json` does.
+      `Cargo.toml` has `serde_json` and **no `serde`**, and `Row`/`Snapshot` live in the library
+      while `--follow` is binary-local, so reaching for `derive` would add a dependency and put
+      derives in `oko::iterm` for one consumer's benefit.
+    - **Two threads write one stdout, so the handle is never held across writes.** `writeln!`
+      on `std::io::Stdout` takes the internal lock per call, which is what keeps a JSON line
+      and a keepalive from interleaving; hoisting `stdout().lock()` out of the writing loop is
+      an ordinary-looking optimisation that starves the keepalive thread forever and silently
+      restores the orphan it exists to prevent.
+  - **Errors.** `src/main.rs:main` covers what `run()` returns, which is the pre-connect
+    failure gate check 6 tests. A socket that dies **mid-stream** arrives as `Event::Error` in
+    the closure instead: `--follow` writes it to **stderr**, never to stdout, and exits
+    non-zero. Stdout carries the header, snapshots and keepalives, and nothing else, ever.
+  - **Tests**, per OQ-8: unit tests over the serializer, which is a pure function from
+    `Snapshot` to a line — schema shape, the version header, the `job`/`claude` omission and
+    the suppression rule. **No `tests/` tree, no seam over the client, and the pty harness is
+    retired** rather than parked a third time.
   - **The consumer's half is not in this phase.** The shortcut, the card layout, the
-    absent-binary behaviour and the process lifetime on panex-tui's side belong to panex,
-    which is a separate repository and **is not spec-driven today** — it has a `CLAUDE.md`
-    and no `specs/` or `rules/`. Whether it adopts the methodology first is a decision for
-    that repo, recorded here only so the boundary is not assumed away.
-  - **A test harness, per OQ-8** — and its scope is that question's answer, not this bullet's
-    assumption. If a seam is worth its cost there is a `tests/` tree and a fixture; if not,
-    the tests stay live-only and say so.
-  - No card layout, no rendering of any kind, **no `--once`** unless the gate turns out to
-    need it, and nothing that lets a consumer act on a session. The stream reports.
-- **Exit gate:** **One window**: a plain `zsh` tab, a Claude Code tab, an `oko` dashboard tab,
-  and the tab the stream is read from. Run the dashboard with `OKO_DEBUG_EMITS=1` so checks 1
-  and 5 can be told apart from each other.
-  1. **The stream is quiet.** With every session idle and no age bucket due,
-     `oko --follow > /tmp/f` writes **no lines for 60 seconds**. Measured with Phase 4's
-     discipline and its trap: **do nothing in any tab of that window**, because anything run
-     in a watched pane moves its `jobName` — the failure that cost Phase 4's gate three runs
-     (OQ-7, `rules/dashboard-ui.md`).
-  2. **The stream is live.** `cd` in the plain tab: one line appears within 2 seconds, and its
-     `path` and derived `name` are the new ones.
-  3. **It agrees with the table.** For every row, `tab`, `name`, `status` and `path` in the
-     JSON match what the dashboard tab draws at the same moment. This is the check that fails
-     an implementation which rebuilds the view instead of reusing `emit_if_changed`.
-  4. **Ages are buckets.** A row older than five minutes carries `>5m` and not a second count,
-     and the line does **not** change while the row sits inside one bucket.
-  5. **Closing the reader stops the writer.** Kill the reading process, or close the pipe:
-     within 5 seconds the `oko --follow` process is gone — checked with `ps`, not inferred —
-     and the dashboard Oko in the same window is **still running**.
-  6. **Stdout carries nothing but JSON.** Every line of `/tmp/f` parses. Turn the API off and
-     start it again: the failure goes to **stderr**, stdout stays empty, and the exit status
-     is non-zero.
-  7. **A real consumer reads it**, and this is the check the observable argument above rests
-     on: something that is not Oko — panex-tui if it is ready, otherwise a scripted reader —
-     consumes the stream and renders or asserts on at least `name` and `status` for every row.
-     A stream nothing has ever read is not an interface, it is a guess.
-  8. **A rename crosses the process boundary.** Press `r` in the dashboard tab and commit a
+    absent-binary behaviour and the child's lifetime belong to panex, a separate repository
+    which **is not spec-driven today** — a `CLAUDE.md`, no `specs/`, no `rules/`. Whether it
+    adopts the methodology is that repo's decision, recorded here so the boundary is not
+    assumed away.
+  - No card layout, no rendering, no `--once`, and nothing that lets a consumer act on a
+    session. The stream reports.
+- **Exit gate:** **One window**: a plain `zsh` tab, a Claude Code tab, an `oko` dashboard tab
+  run with `OKO_DEBUG_EMITS=1`, and the tab the stream is read from. **`--follow` must run
+  *without* `OKO_DEBUG_EMITS`** — `src/iterm/watch.rs:emits_log` is one fixed path with no pid
+  in it, so a variable exported in the shell would have both processes appending to one file
+  and check 1 conflating them. Throughout, "a line" means a **JSON** line. Keepalives are empty lines, so
+  **`grep -c .` is the count** — it counts lines with at least one character, which is
+  exactly the JSON ones. **`wc -l` is the trap**: it counts every newline, keepalives
+  included, and a checker carrying Phase 4 check 9's `wc -l` habit records a failure
+  against a correct build.
+  1. **The stream is quiet.** Start `oko --follow > /tmp/f`, wait for the header and the
+     opening snapshot, then **wait a further 10 seconds before starting the clock** — launching
+     it moved that pane's `jobName` from `zsh` to `oko`, which iTerm2 re-samples about 0.6 s
+     later (OQ-3) and which is a legitimate emission. From there, with every session idle:
+     **no further JSON line for 60 seconds**, and **the `--follow` process is still running at
+     the end** (`ps`, not inference — a dead process is silent too). "Every session idle" is
+     checked, not assumed: `cat ~/.oko/status/*.json` and confirm no `at` is within 60 s of the
+     5, 10, 30 or 60-minute marks, and that no row renders `working`. And **do nothing in any
+     tab of that window** — anything run in a watched pane moves its `jobName`, which is the
+     trap that cost Phase 4's check 9 three runs (OQ-7).
+  2. **The stream opens with the state.** The first data line, before anything is touched,
+     carries every session in the window with its current name, status and path — not an empty
+     `rows`, and not nothing at all.
+  3. **The stream is live.** `cd` in the plain tab: one line appears within 2 seconds carrying
+     the new `path` and derived `name`. **Record what the stopwatch said** — `path`'s latency
+     has been asserted at 2 s since Phase 2 and never written down, and Phase 2's own check 5
+     asked for the number and did not get it.
+  4. **It agrees with the table.** For every row, `tab`, `name`, `status` and `age` in the JSON
+     match what the dashboard draws at the same moment, and `path` matches after applying
+     `src/ui.rs:abbreviate_home` — the table renders `$HOME` as `~` and truncates `name` to 16
+     cells, so a literal string comparison fails a correct build. (An agreement check, not a
+     discriminating one: two Okos reading one `ListSessions` and one status directory agree
+     whether or not the second reuses `emit_if_changed`.)
+  5. **Ages are buckets.** A row older than five minutes carries `>5m`, not a second count, and
+     the line does not change while that row sits inside one bucket.
+  6. **Closing the reader stops the writer.** Close the read end while leaving the reading
+     *process* alive — this is the case §2.13's "degrade to nothing" produces, and the one a
+     kill would not test. **No shell pipeline does this on its own**: use the scripted reader
+     check 8 already requires, closing its end of the pipe and staying up. Within **15 seconds** (three keepalive intervals) the `oko --follow`
+     process is gone, checked with `ps`, and the dashboard Oko in the same window is still
+     running.
+  7. **Stdout carries nothing but the protocol.** Every non-blank line of `/tmp/f` parses as
+     JSON, and the first is the header. Turn the API off and start again: the failure goes to
+     **stderr**, stdout stays empty, exit status is non-zero.
+  8. **A real consumer reads it.** Something that is not Oko — panex-tui if it is ready,
+     otherwise a scripted reader — consumes the stream and renders or asserts on `name` and
+     `status` for every row. See the observable argument: this closes the gate, not the risk.
+  9. **A rename crosses the process boundary.** Press `r` in the dashboard tab and commit a
      name: the stream emits a line carrying it. Two processes, one `user.okoName`, no protocol
      between them — §2.10's claim, observed across a boundary Phase 4 never tested.
-  9. **The unknown-version path**, per OQ-9's resolution: a consumer shown a schema it does not
-     recognise reports that rather than rendering a partial row.
-- **Close-out:** seeds a new rule for the interface — `rules/follow-stream.md`, not a section
-  of `rules/dashboard-ui.md`, whose `covers` is the dashboard Oko *draws* and which would be
-  describing two different products. It records the schema, the version contract, the exit
-  behaviour, and what the stream deliberately omits. Updates `rules/dashboard-ui.md` only where
-  `--follow` changes something about the drawn table, which may be nothing. `README.md` gains
-  the mode and — depending on OQ-9 — what a consumer is promised. Resolves OQ-7, OQ-8 and OQ-9
-  in §3. **The `CLAUDE.md` observable line is re-read**: this phase adds a second surface for
-  the same observable rather than a new one, so "checked, no change needed" is a likely and
-  legitimate answer. Commit plan and reconciliation step are stated in the phase's plan.
+  10. **An unknown schema is refused.** Hand the consumer of check 8 a header with a `schema`
+      it does not know: it reports that and renders no rows, rather than drawing what it can.
+- **Close-out:** seeds `rules/follow-stream.md` — a new rule, not a section of
+  `rules/dashboard-ui.md`, whose `covers` is the dashboard Oko *draws*. It records the schema,
+  the header contract, the omission and suppression rules, the keepalive, the exit behaviour
+  and what the stream deliberately omits, and **declares its own `max_lines`** (§8.1).
+  `rules/dashboard-ui.md` needs a smaller change than it looks, and getting the reason right
+  matters: **its emission paragraph is untouched** — nothing in this phase reaches
+  `emit_if_changed`, and `rules/follow-stream.md` owns everything about the stream. What does
+  change is that the rule declares `src/main.rs` among its `sources`, and `src/main.rs:run`
+  acquires a **second entry point** before `ratatui::init()`. That is the fact to fold in. It
+  is at 109/112, so that close-out still **raises or cuts deliberately and says which**, as
+  Phases 2, 3 and 4 each did. `README.md` gains the mode and what a consumer is
+  promised. Resolves OQ-7, OQ-8 and OQ-9 in §3 — all three answered in this phase's review
+  round, so none is carried into implementation. **The `CLAUDE.md` observable line is
+  re-read**: this phase adds a second surface for the same observable rather than a new one, so
+  "checked, no change needed" is a likely and legitimate answer. Commit plan and reconciliation
+  step are stated in the phase's plan.

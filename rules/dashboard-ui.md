@@ -114,7 +114,7 @@ snapshot time and never held on the watcher's own rows.
 re-sample emits a snapshot that renders identically. Measured 2026-08-16: **anything run in a
 watched pane** moves that pane's deepest foreground job, and a shell loop calling `sleep`
 once a second produced a *pair* of emissions every ~1.9 s — iTerm2's job poll catching
-`sleep`, then `zsh` — some fifty a minute with nothing changing on screen. Under
+`sleep`, then `zsh` — some sixty a minute with nothing changing on screen. Under
 `OKO_DEBUG_EMITS`, `emit_if_changed` appends one timestamp per emission to
 `~/.oko/emits.log`; that file counts emissions, **not** differing redraws, so anything
 measuring quietness with it must keep the watched panes idle to mean anything.
