@@ -58,8 +58,8 @@ and `path` are what Oko knows rather than what the table draws — the `-` place
 the 16-cell truncation are the table's decorations.
 
 **A row with a status carries no `job`.** That `jobName` is never displayed, is no identity
-test, and was measured unstable *within a single session*, so publishing it would export
-instability rather than information.
+test, and on a Claude pane never moves: Claude Code hands a tool no foreground job, so the
+value stays the agent process. Publishing it would repeat one constant rather than inform.
 
 ## Quietness is the writer's property
 

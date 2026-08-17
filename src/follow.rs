@@ -179,13 +179,15 @@ fn snapshot_line(snapshot: &Snapshot) -> String {
 /// right. And `name` and `path` are what Oko *knows*: no `-` placeholder, no `~`, no
 /// truncation to a column width — those are the table's decorations, not the interface's.
 ///
-/// **A row carrying a status carries `claude: true` and no `job`** (OQ-7). That `jobName` is
-/// never displayed, is ruled inadmissible as identity by OQ-2, and was measured *unstable
-/// within a single session* — whatever happened to be deepest at the instant iTerm2 sampled.
-/// Publishing it would export instability rather than information. This is not the table's
-/// display rule leaking into the interface: it is the interface declining to publish a field
-/// its own spec calls untrustworthy for those rows. A row *without* a status carries `job`
-/// verbatim, 16-byte truncation and all, because there it is the value and the only one.
+/// **A row carrying a status carries `claude: true` and no `job`** (OQ-7, sharpened by OQ-12).
+/// That `jobName` is never displayed, is ruled inadmissible as identity by OQ-2, and on a
+/// Claude pane **never moves**: Claude Code spawns its tools without handing them the tty's
+/// foreground process group, so the value stays the agent process for the whole session.
+/// Publishing it would repeat one constant forever — it can never name the work. (The
+/// "unstable within a single session" reading this comment used to carry was measured on a
+/// *plain* pane, where the deepest job does churn; OQ-7 borrowed it onto Claude rows, where it
+/// does not hold.) A row *without* a status carries `job` verbatim, 16-byte truncation and
+/// all, because there it is the value and the only one.
 fn row_json(row: &Row) -> serde_json::Value {
     let mut value = json!({
         "session_id": row.session_id,

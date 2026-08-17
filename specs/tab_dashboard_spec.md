@@ -899,7 +899,22 @@ reader that draws, and the writer is gone by the time the reader hears about it.
   `claude` — (b) already ruled inadmissible as identity by OQ-2, and (c) measured *unstable
   within a single session*: `node` on two tabs and `rust-analyzer-pr` on two others, whatever
   was deepest at the instant iTerm2 sampled. Emitting it would export instability rather than
-  information, so such a row carries `claude: true` and no `job`. **That is not the table's
+  information, so such a row carries `claude: true` and no `job`.
+
+  **CORRECTED 2026-08-17 (by OQ-12's measurement). The decision stands and (c) is wrong.** A
+  Claude row's `jobName` is not unstable — it is **invariant**. Claude Code spawns its tools
+  without handing them the tty's foreground process group, so the value stays the agent process
+  for the life of the session: 38 minutes over seven panes with four status transitions, plus a
+  deliberate 76-second tool call, produced zero `jobName` events against a control that fired.
+  **The evidence cited above never supported (c) in the first place**: `node` on two tabs and
+  `rust-analyzer-pr` on two others is variation *across* tabs, and OQ-2's within-session
+  evidence — `rustup` then `probe` seconds apart — was explicitly a **non-Claude** pane, where
+  the deepest job really does churn. OQ-2 is right where it was written; this resolution
+  borrowed it onto rows it does not reach.
+  **Why the wrong reason mattered more than the right conclusion**: "unstable" invites
+  *stabilise it and publish it*, and "invariant" forecloses it. It had already propagated into
+  `rules/follow-stream.md`, `src/follow.rs` and a comment in the consumer's repo before anyone
+  measured a Claude pane. All three now say invariant. **That is not the table's
   display rule leaking into the interface**, which is what made the third candidate look
   suspect: it is the interface declining to publish a field its own spec says is untrustworthy
   for those rows. A row *without* a status still carries `job` verbatim, truncation and all,
@@ -1031,9 +1046,35 @@ reader that draws, and the writer is gone by the time the reader hears about it.
   live today rather than latent. **The observation does not decide it**, which is the point of
   taking it separately: what it removes is the possibility of settling this by arguing about
   what the code probably does.
-- **OQ-12 — Should a row carrying a status publish `job` alongside it?** *(design call, and
-  it needs a measurement nobody has taken — blocks a schema 2; it is why a consumer cannot
-  draw a process and a status on one card)* Today the two are exclusive: `src/follow.rs:row_json`
+- **OQ-12 — Should a row carrying a status publish `job` alongside it?** **RESOLVED 2026-08-17
+  by measurement — no — and the question's own premise was false.**
+
+  **No, on stronger grounds than OQ-7 gave.** A Claude pane's `jobName` is not unstable, it is
+  **invariant**. Claude Code spawns its tools without handing them the tty's foreground process
+  group, so the pane's deepest foreground job stays the agent process throughout. Measured with
+  `probe watch`: 38 minutes over seven panes, with four Claude status transitions in that
+  window including a `working` carrying a `Bash` tool, plus a deliberate 76-second tool call in
+  a watched Claude pane spawning `find` and `python3` — **zero `jobName` events**, against a
+  control that fired (`probe`'s own startup moved its pane's job at 0.373 s). So `job` on such
+  a row would repeat one constant forever. There is no version of the field that names the
+  work, which retires the "does it track the tool or thrash" framing: it does neither.
+
+  **The premise was wrong too, and that is the more expensive half.** This question asserted
+  the omission "is why a consumer cannot draw a process and a status on one card". A consumer
+  always could. What the consumer wanted beside the status was the constant word `claude`,
+  which schema 1 has published since Phase 5 as `claude: true`, and which the dashboard's own
+  table derives the same way — `src/ui.rs:render_row` draws the literal `claude` because a
+  status file exists, never because of a process name (OQ-2). Nothing was blocked, and the
+  card needed a rendering change in the consumer rather than a field here (`Ivapo/PanEx#4`).
+  **So: no `schema: 2`, and no phase.**
+
+  Where the correction landed: `rules/follow-stream.md` and `src/follow.rs:row_json` now say
+  invariant rather than unstable, and OQ-7's resolution carries a dated `CORRECTED` note —
+  it had borrowed OQ-2's within-session evidence, which was measured on a *non-Claude* pane,
+  onto Claude rows it does not reach. OQ-2 itself is correct as written and untouched.
+
+  *(design call, and it needs a measurement nobody has taken — blocks a schema 2; ~~it is why a
+  consumer cannot draw a process and a status on one card~~)* Today the two are exclusive: `src/follow.rs:row_json`
   writes `claude: true` **or** `job`, never both, and OQ-7 argued that publishing a Claude
   row's `jobName` would export instability rather than information — it is a *descendant* of
   `claude` (`node` on this machine, OQ-2), it is never displayed, and it was measured moving
