@@ -5,7 +5,7 @@ note: >
   The iTerm2 dashboard tab — live per-tab directory, process and Claude Code status for
   every tab in the window, with Enter to jump to the selected one.
 status: accepted
-last_updated: 2026-08-16
+last_updated: 2026-08-17
 
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
@@ -31,6 +31,11 @@ phases:
   - name: "Phase 5 — a stream another program can draw"
     reviewed: 2026-08-16
     shipped: 2026-08-16
+    cut: null
+    by: null
+  - name: "Phase 6 — acting on a row from outside the dashboard"
+    reviewed: 2026-08-17
+    shipped: null
     cut: null
     by: null
 
@@ -548,6 +553,115 @@ nothing in it lets a consumer act on a session except by reading. §2.6 rejected
 because a split pane lives in one tab and would need one copy per tab; a separate program
 reading a stream is not that, so that argument does not reach this.
 
+**CORRECTED 2026-08-17 (Phase 6).** Two sentences above are now misleading, and in opposite
+directions — one understates the contract, the other overstates the conclusion.
+
+- **"the whole contract is two facts"** is three. `--version` is the third, and it is not a
+  convenience: a `PATH` lookup cannot tell a build that speaks this stream from one that
+  predates it, and the older build answers `--follow` by falling through to the dashboard,
+  where `ratatui::init()` meets a pipe and panics. See §2.14.
+- **"nothing in it lets a consumer act on a session except by reading"** stays true of *the
+  stream* — no request channel was added, no reader became a writer — but is now the wrong
+  thing to conclude about *Oko*, which a reader stopping here would. A consumer can act, by
+  a second short-lived process rather than through this pipe; §2.14 is the argument, and it
+  is what preserves the sentence's literal claim rather than contradicting it.
+
+The paragraph is otherwise untouched, and its §1.1 sentence needs no correction for a reason
+worth stating: the two commands Phase 6 adds are `↵` and `r`, which the table already did.
+No non-goal moved — **on the reading that §1.1's cross-window non-goal is about the view**,
+which is the literal one and is the reading OQ-11 declines to settle. If OQ-11 lands the other
+way, §1.1 is what changes, and this sentence is what will be wrong.
+
+### 2.14 Acting is a second invocation, not a second direction (decision, recorded — added by Phase 6)
+
+§2.13 gave a consumer rows it can draw and no way to act on what it drew. That held for
+exactly as long as nobody drew them. panex-tui's card view (`Ivapo/PanEx#3`) renders one card
+per row and then wants what a human looking at the same rows wants — jump to that tab, name
+it — and the only answer Oko had was *go to the dashboard tab and press a key*, which asks a
+person to leave the view they are in to act on the view they are in.
+
+**Two ways to fix that, and the difference between them is the direction of the pipe.**
+
+1. **Widen the stream.** `--follow`'s stdin is unused; a consumer could write requests into it
+   and the writer could act on them.
+2. **A second process per action.** The stream stays one-directional; a consumer that wants to
+   act spawns `oko --activate <id>` or `oko --set-name <id> [name]`, which connects, does the
+   one thing, and exits.
+
+**(2), and the reason is the same requirement that produced §2.13 rather than a new one.**
+One-directionality is not an accident of the pipe, it is what makes the failure mode visible:
+a stream that only ever writes fails by stopping, which a consumer sees. Give the reader a
+way to write back and the interface acquires request/response — correlation, timeouts, and a
+failed command that has to be reported *inside* a protocol whose only rule today is "every
+non-blank line is a snapshot". §2.13 bought a contract small enough to state in two sentences;
+routing commands through it spends that. And the asymmetry is real in the other direction too:
+a consumer that only wants to act — a keybinding that jumps to a session it already knows the
+id of — would have to open and hold a stream to send one message.
+
+The cost is stated rather than hidden: **every command pays a fresh connection and a fresh
+authorization** (`src/iterm/client.rs:Client::connect` → `request_cookie_and_key`, then
+`src/iterm/watch.rs:Watcher::connect`'s `list_sessions`, `resolve_own_session`, `rescan` and
+its per-session subscriptions), all to send one request and exit. That is cheap for one
+keypress and it is now the interface, which is OQ-10.
+
+**Why these two commands and no others.** `--activate` and `--set-name` are `↵` and `r`,
+exactly — the same `src/iterm/watch.rs:Cmd` variants the dashboard has sent since Phases 2 and
+4, reaching iTerm2 through the same `src/iterm/watch.rs:Watcher::execute`. Nothing new became
+possible; a second door opened onto the same two things. **That claim is only true if the two
+doors also refuse the same things**, and one of them did not: the dashboard's editor trims its
+buffer and maps empty to `Cmd::Rename(_, None)` (`src/ui.rs:on_key_editing`), so no keystroke
+can produce a blank name, while `oko --set-name <id> ""` reached exactly the `Some("")` state
+§2.10 calls a trap. `parse_command` now trims and maps empty the same way, and the alignment
+is part of this phase rather than a later tidy-up — a door that can reach a state the other
+cannot is a second interface, not a second door. That is what keeps §1.1's non-goals
+literally intact — no prompt is sent, no permission request is answered, nothing is spawned,
+killed or resized — and it is the boundary this section draws for later: **a third command is
+a new decision, not an extension of this one.** The test is whether the dashboard can already
+do it.
+
+**One implementation, because two would drift.** `Watcher::execute` is public for that reason
+rather than for convenience: a rename has to write `user.okoName` *and* patch the in-memory row
+(`src/iterm/watch.rs:rename`), and a second implementation that forgot the second half would
+look like a flaky rename rather than a missing write. An absent name clears, matching
+`Cmd::Rename(_, None)` and OQ-5's measured `null`-unsets — `""` would read back as a name and
+render blank, with no further rename able to escape it.
+
+**The join is the session id the stream publishes.** `session_id` is already the first field of
+every row (`src/follow.rs:row_json`), so the interface a consumer keys its cards on is the
+interface it acts through, with nothing to look up in between.
+
+**Presence is not capability, and that is a third fact in §2.13's contract.** "A binary named
+`oko` may be on `PATH`" is what a consumer can check; it is not what a consumer needs to know.
+A build predating Phase 5 has that name and does not speak the stream — it treats `--follow` as
+an unrecognised argument and falls through to the dashboard, where `ratatui::init()` meets a
+pipe and panics. What the caller gets is a dead child and an escape sequence, which is
+indistinguishable from a bug in itself. So `--version` answers **ahead of every other branch**
+(`src/main.rs:run`), before `--follow` and before any connection.
+
+**How expensive the fall-through is, stated as what was actually measured.** One `--activate`
+against a live window costs ~120 ms (Phase 6, check 10); `--version` on the same build returns
+in 13–15 ms. The difference — **103–111 ms** — is *everything a command does beyond printing a
+version*, which is the `osascript` cookie, the handshake, `list_sessions`,
+`resolve_own_session`, `rescan`'s per-session variable fetch and subscriptions, and then the
+one request. **That subtraction does not isolate the connection from the rest**, and saying it
+does would matter, because OQ-10's first candidate remedy is a path that skips `rescan`.
+A stale Oko pays the whole ~110 ms and then panics, which is
+why answering early is what makes a consumer's probe bounded — panex-tui bounds it at 300 ms
+and caches the result once per process. The consumer-side figure often quoted alongside this,
+that an uncached probe took its suite from 6 s to 173 s, is an **aggregate over an unstated
+number of spawns** and is evidence that the cost compounds, not evidence about one call; the
+number above is the one about a single call.
+
+**What this does not change.** The stream is byte-for-byte what Phase 5 shipped: no new field,
+no schema bump, no stdin. §2.13's "degrade to nothing" still holds end to end, and now covers
+the commands too — no Oko on `PATH` means no cards *and* no key that does nothing, which is how
+panex-tui already spells it. Two Oko instances in one window stay safe for §2.13's reasons,
+with one addition this phase leans on: a rename from a one-shot invocation reaches a dashboard
+Oko in the same window through `user.okoName`'s variable notification, which is OQ-5's third
+measurement. **Phase 5's check 9 already leaned on it** — a rename in the dashboard appearing
+in the stream — so what is new is the *direction*, a writer that draws nothing reaching a
+reader that draws, and the writer is gone by the time the reader hears about it.
+
 ## 3. Open questions
 
 - **OQ-1 — How does a Rust binary reach the iTerm2 API?** **RESOLVED 2026-08-14 by Phase
@@ -849,6 +963,92 @@ reading a stream is not that, so that argument does not reach this.
   rather than mis-rendering — the same "visible absence beats a confident wrong answer" that
   §2.7 turns on. Worth settling **whether the version is per stream or per line**, because a
   long-lived stream outlives the process that decided to trust it.
+- **OQ-10 — Is a fresh connection and authorization per command the right cost, now that it
+  is the interface?** *(design call; its measurement was taken 2026-08-17 and is below —
+  blocks nothing in Phase 6, and blocks any consumer issuing commands faster than a human
+  presses a key)* One
+  keypress paying one connection is unarguable. What changed is who presses it: `--activate`
+  and `--set-name` are now something a program calls, and each call runs `osascript` for a
+  cookie (`src/iterm/client.rs:request_cookie_and_key`), handshakes, lists every session,
+  resolves its own, rescans and subscribes — `src/iterm/watch.rs:Watcher::connect` builds a
+  complete watcher and then throws it away to send one `ActivateRequest`. And a cookie is
+  single-use and spent by the connection that uses it (`rules/iterm-api.md`), so this is not a
+  handle something could cache — the reuse question is really "should a command path exist
+  that does not build a watcher", which is a different shape.
+
+  **The number is in, and it answers half the question.** Gate check 10, measured 2026-08-17
+  against a live four-tab window: one `oko --activate` costs **126 / 127 / 116 ms**, and
+  `oko --version` on the same build costs **13–15 ms**. That is comfortably a keypress, and the
+  cost half of this question closes: **a command per action is affordable, recorded, and not to
+  be optimised on suspicion.** **What the subtraction does *not* give is a breakdown**: the
+  103–111 ms between the two covers the cookie, the handshake, `list_sessions`,
+  `resolve_own_session`, `rescan` and its per-session subscriptions, and the request itself,
+  all together. Anyone reaching for the first remedy below needs that split and does not have
+  it — measuring it is the first step of acting on this question, not a step that was skipped
+  in answering it.
+
+  **What stays open is the shape, and the trigger is a rate rather than a duration.** 110 ms
+  is nothing once and is 1.1 s across ten, so a consumer that renames on every keystroke, or
+  fans commands across a window of rows, pays it linearly — and Phase 6's own consumer draws
+  a card per row. Nothing forces the question today; a card view acting on one selection at a
+  time never reaches it. **The trigger to name is a consumer issuing commands faster than a
+  human presses a key**, and the answers then are a lighter path that skips `rescan` and its
+  subscriptions (a command needs neither), batching several commands into one invocation, or
+  telling consumers to debounce. **The one answer this section rules out in advance is a
+  daemon** — a long-lived process accepting commands is §2.14's rejected direction wearing a
+  different hat, and it would take the three-fact contract with it.
+- **OQ-11 — Should a command refuse a session outside Oko's own window?** *(design call —
+  blocks nothing in Phase 6; decides whether §1.1's cross-window non-goal is about the view
+  or about the writes)* Neither command checks. `src/main.rs:parse_command` takes the id as
+  given, and `Watcher::execute` hands it to `client.activate` or `rename`, both of which
+  address a session by id with no window scope anywhere in the path. So `oko --set-name`
+  will name a session in a window this Oko cannot see, and `oko --activate` will raise one.
+  **The two are not the same question, which is the part worth separating before deciding.**
+  For `--activate`, crossing windows is arguably the feature — "jump to that session" has an
+  obvious meaning wherever the session is, iTerm2's `ActivateRequest` already carries
+  `order_window_front`, and refusing would mean a consumer holding a valid id it is not
+  allowed to use. For `--set-name`, the write lands where the caller cannot see it: no Oko in
+  *that* window need be running, and if one is, it learns the new name through
+  `user.okoName`'s notification and shows a row renamed by something in another window
+  entirely. That is not obviously wrong — it is how one Oko's rename reaches another one
+  today (§2.10) — but it is a capability §1.1 never considered, because §1.1 is written about
+  what the *table* shows.
+  **The honest position is that this was not decided, it was inherited**: the id-addressed
+  path came from the dashboard, where every id came from Oko's own window and the question
+  could not arise. Three answers are open — scope both to the own window, scope neither and
+  say so in §1.1, or scope `--set-name` and not `--activate` on the asymmetry above. **The
+  third is the one that needs the most argument and is therefore the one to be suspicious
+  of.**
+
+  **Measured 2026-08-17 (gate check 11), so this is not a reading of the code: both cross.**
+  Against a scratch second window, `oko --set-name` returned 0 — and
+  `src/iterm/client.rs:set_variable` bails on any status that is not `OK`, so iTerm2 accepted
+  a write to a session in a window the caller cannot see — and `oko --activate` moved focus
+  into that window. Neither command is scoped anywhere in the path, and the capability is
+  live today rather than latent. **The observation does not decide it**, which is the point of
+  taking it separately: what it removes is the possibility of settling this by arguing about
+  what the code probably does.
+- **OQ-12 — Should a row carrying a status publish `job` alongside it?** *(design call, and
+  it needs a measurement nobody has taken — blocks a schema 2; it is why a consumer cannot
+  draw a process and a status on one card)* Today the two are exclusive: `src/follow.rs:row_json`
+  writes `claude: true` **or** `job`, never both, and OQ-7 argued that publishing a Claude
+  row's `jobName` would export instability rather than information — it is a *descendant* of
+  `claude` (`node` on this machine, OQ-2), it is never displayed, and it was measured moving
+  within a single session. **That argument is about identity and display, and the consumer's
+  question is neither.** panex-tui draws a card, not a row, and a card has room for what a
+  table column did not; a human looking at three agent tabs may well want to know that one of
+  them is inside a `cargo test` while it says `working`. The exclusivity is what makes that
+  undrawable, and it was not chosen for the card case — the card case did not exist.
+  **What is genuinely unresolved is whether the field would be information at all**, and that
+  is measurable rather than arguable: sample `jobName` on a Claude row over a working session
+  and see whether it tracks the tool in flight or thrashes between `node` and whatever the
+  agent spawned. If it thrashes, the answer is no on the original grounds and §2.12's
+  in-flight tool is the honest place for that signal instead. **A `job` that is sometimes the
+  agent's real work and sometimes `node` is the bad outcome**, because a consumer cannot tell
+  those apart and would draw the second as confidently as the first — §2.7 again, one layer
+  out. Resolving this either way is a schema change and therefore a `schema: 2` and a phase
+  of its own; adding a field a consumer must ignore is not a compatible extension when the
+  consumer's contract is "a header you do not recognise draws nothing".
 
 ## 4. Implementation phases
 
@@ -1438,3 +1638,174 @@ that is a fact about another repository which this document cannot assert.*
   re-read**: this phase adds a second surface for the same observable rather than a new one, so
   "checked, no change needed" is a likely and legitimate answer. Commit plan and reconciliation
   step are stated in the phase's plan.
+
+### Phase 6 — acting on a row from outside the dashboard
+
+*Produces the observable: **no**, and for the third time in six phases — but the argument is
+not Phase 1's or Phase 5's, and pretending it is would be the mistake. Those two produced
+mechanism and hoped for a consumer. This one was **asked for by a consumer that already
+exists**: panex-tui's card view (`Ivapo/PanEx#3`) draws `--follow` today and had no way to act
+on what it drew. So Phase 5's stated risk — "if panex-tui's card view is never built, Oko
+carries a JSON mode with no reader" — closed on 2026-08-16, and this phase is the first thing
+the reader asked for after it closed. The observable is unchanged: a human still gets the
+dashboard, and nothing here is visible in Oko's own table. What is new is that the same two
+behaviours are reachable by a program, and the visible payoff is again in another repository.*
+
+***Written after the fact, and this is the disclosure rather than a footnote.*** *The work was
+built, verified and pushed before this phase existed: `d4605eb` (`--version`) and `7af81ab`
+(`--activate`, `--set-name`), open as `Ivapo/oko#2`. That inverts §3's order — a phase is meant
+to be planned from the spec and cleared by its own review round before code — and the cost is
+specific, not ceremonial: **a review round held over existing code is a weaker gate than one
+held over a plan**, because the reviewer is reading an implementation that already works and
+the cheapest verdict is to agree with it. Two things bound that, and both are facts rather than
+intentions. **Nothing is merged** — the PR is draft, `main` has none of it, so a blocking
+finding costs a force-push and not a revert; the phase is genuinely still refusable. And the
+decision this round exists to judge is §2.14's, which is an argument about interface direction
+that stands or falls on its own and can be read without the diff. The exit gate below is
+written to suit the inversion: it is a **check on the build** rather than a guard for an
+implementer, and no check in it may be marked from what the commits claim. It had not been run
+when this phase was drafted; what running it found is in the review record, and it found a
+defect in the gate before it found anything about the code.*
+
+- **Scope** — all of it exists; this states what the review round is being asked to accept.
+  - **`--version` / `-V`** (`src/main.rs:run`). Prints `oko <CARGO_PKG_VERSION>` and returns,
+    **ahead of the `--follow` branch and ahead of `Watcher::connect`** — the ordering is the
+    feature, per §2.14. It touches iTerm2 not at all.
+  - **`--activate <session>`** and **`--set-name <session> [name]`**
+    (`src/main.rs:parse_command`, then `src/iterm/watch.rs:Watcher::execute`). Connect, run one
+    `Cmd`, exit. An **absent** name clears, matching `Cmd::Rename(_, None)`, and so does an
+    empty or all-whitespace one — `parse_command` trims and maps empty to `None` exactly as
+    `src/ui.rs:on_key_editing` does, which is the one behavioural change this phase makes to
+    what the commits already contained, for the reason §2.14 gives. Parsing is a scan for the
+    first recognised flag and its operands; there is no argument-parser dependency and the
+    phase does not add one.
+  - **`Watcher::execute` is new and public**, and is the *whole* structural change: the
+    dashboard's command loop in `Watcher::run` now matches `Ok(cmd)` once and delegates,
+    instead of one arm per variant. `Cmd::what` supplies the `jump` / `rename` prefix that the
+    inlined arms used to write literally, so `Event::Error`'s text is unchanged. **This is the
+    one place a dashboard regression could hide** — it is the only edit to a path a human uses
+    — and gate check 8 is aimed squarely at it.
+  - **`rules/session-commands.md`** is new, per §8's one-job-each split: `follow-stream.md`
+    covers the stream, and acting is not the stream. `follow-stream.md` gains the `--version`
+    clause and a pointer to it. `README.md` gains the two commands and the version line.
+  - **Not in scope, and each is a decision rather than an omission:** no third command (§2.14's
+    test is whether the dashboard already does it); no batching; no stdin, no request channel,
+    no daemon; no window scoping (OQ-11 records the behaviour and does not decide it); no
+    schema change (OQ-12 would be `schema: 2` and a phase of its own).
+- **Exit gate.** **One window**: a plain `zsh` tab, a Claude Code tab, an `oko` dashboard tab,
+  and the tab commands are issued from. Every check below is run against the built binary; none
+  is inferred from the diff, and **the binary is rebuilt first** — a `target/debug/oko` left
+  over from before these commits answers check 1 by drawing a dashboard, which is a failure
+  against a build that passes. Checks 1 and 9 need no iTerm2 window and no API. **Check 2 needs
+  both**, which is the opposite of the obvious reading and is the trap in it.
+  1. **`--version` answers on a pipe.** `oko --version | cat` prints one line, exits 0, and
+     leaves the terminal usable; `-V` likewise. Repeat with the iTerm2 API **switched off**:
+     identical result — it is ahead of the connection, so nothing about iTerm2 can change this
+     answer. **Switch the API back on before check 2**, which is not a courtesy to the next
+     check but a precondition of it.
+  2. **The build it is meant to distinguish actually fails the other way.** Two builds, one
+     flag each, because the claim has a historical form and a present one:
+     - **`412cfca`** — the last commit before `f80cc1e` added `--follow` — built and run as
+       `oko --follow | cat`. This is §2.14's literal claim: an unrecognised flag falls through
+       to the dashboard.
+     - **`main`** built and run as `oko --version | cat`. `main` **has** `--follow` (Phase 5
+       shipped there), so it cannot exhibit the fall-through for that flag; `--version` is the
+       flag it does not know, and it is also the exact probe a consumer runs today.
+
+     Both must panic inside `ratatui::init()`. **The API must be on and the pane must be a
+     real iTerm2 pane for either run**, and getting this backwards is how a correct build gets
+     failed: `412cfca:src/main.rs:run` calls `Watcher::connect` on its **first line**, before
+     `ratatui::init()`, so with the API off — or from anywhere without `TERM_SESSION_ID` — it
+     exits 1 with a clean message and never reaches the panic. **If both panic, §2.14 stands.
+     If either fails cleanly instead, check the API is on before recording anything**; a
+     genuine clean exit with the API on means §2.14 is wrong and the finding is blocking, the
+     correction being that `--version` is worth having for a smaller reason.
+
+     **Build both in a `git worktree`, not by moving this one.** Checks 3 onward need the
+     phase's binary back; a checker who reaches them with `412cfca` still checked out is
+     testing the build that has none of this.
+  3. **`--activate` jumps from outside.** From the plain tab, `oko --activate <id>` for the
+     Claude tab's session id: iTerm2's focus moves there, exit status 0, stdout empty.
+  4. **`--set-name` sets, and the dashboard sees it.** With the dashboard tab running,
+     `oko --set-name <id> "api work"` from another tab. The dashboard's row shows the new name
+     **without a keystroke in it**. Two processes, one `user.okoName`, no protocol between them
+     — OQ-5's third measurement, in the direction Phase 5's check 9 did not test: the writer
+     here draws nothing and has exited before the reader hears about it.
+  5. **An absent name clears, and so does an empty one.** `oko --set-name <id>` on that same
+     row: it falls back to the derived default, the last component of `path`. Then
+     `oko --set-name <id> ""` and `oko --set-name <id> "   "`: **both must also clear**, not
+     render a blank name. Seeing the derived value come back is itself the proof the variable
+     was *unset* rather than set to something empty — `Some("")` renders as a blank, so the
+     derived value cannot be what a blank produces.
+  6. **A failure is a failure.** `oko --activate NOSUCHSESSION`: **non-zero** exit, one line on
+     **stderr**, **nothing** on stdout. Same for `--set-name` with a bad id, and for
+     `--activate` with no operand at all. **Record the exact strings** — `rules/session-commands.md`
+     quotes one, and a gate that pins only "one line on stderr" is how it came to quote a line
+     the code does not produce.
+  7. **The stream and the commands join up.** Run `oko --follow > /tmp/f`, take a `session_id`
+     from a data line, `oko --set-name <that id> "from a card"`, and confirm `/tmp/f` gains a
+     line carrying the new `name`. This is the end-to-end claim of §2.14 — the id a consumer
+     draws is the id it acts through — and it is the only check that tests both halves at once.
+  8. **The dashboard is not collateral damage.** In the dashboard tab: `r`, rename, commit —
+     the name changes. `↵` on another row — focus moves. Then force an error the refactor could
+     have mangled, and force it **deterministically**: press `r` on a row, close that row's tab
+     while the editor is open, then commit. `src/ui.rs:Edit` holds the `session_id` it captured
+     and a layout change does not close the editor, so the rename is sent against a session
+     that is gone and the footer must read `rename failed: setting user.okoName on … failed:
+     SessionNotFound` (`proto/api.proto:VariableResponse.Status.SESSION_NOT_FOUND`, which
+     `src/iterm/client.rs:set_variable` turns into the `bail!`). **Give the close a few seconds
+     first**: iTerm2's undo-close grace may keep a just-closed session addressable, and a
+     `VariableResponse` of `OK` means no error reaches the footer at all — which is a failure
+     recorded against a correct build, the same shape as this gate's own check-2 defect. If the
+     footer stays quiet, wait past the undo window and retry rather than recording anything.
+     (The obvious version of this — `↵` on a closed row — is a race and not a check: a closing
+     tab emits a layout change at once and `src/ui.rs:App::apply` remaps the selection within
+     about a second, so the window to press it in is sub-second. Use it only as a bonus, and it
+     is the only way to see the `jump` prefix — this check forces `rename` alone. Both come
+     from `Cmd::what`'s one match, which is the line the refactor introduced, so seeing either
+     exercises it.)
+  9. **`cargo test` passes and `cargo clippy` is clean**, including **unit tests over
+     `parse_command`** — the phase's only code change, and a pure function, so the trim, the
+     three clearing spellings, the missing-operand error and the recognise-nothing case are
+     cheaper to hold here than in check 5. Phase 5's serializer tests remain the regression
+     surface for the stream half of check 7.
+  10. **Record the cost of a command (OQ-10).** Time one `oko --activate` end to end against a
+      live window — `time`, three runs, record the numbers here and in the review record. **This
+      check cannot fail**; it produces the number OQ-10 needs and nothing else.
+  11. **Record the cross-window behaviour (OQ-11).** Open a second iTerm2 window, take a session
+      id from it, and run both `oko --set-name <id> "other window"` and `oko --activate <id>`
+      from the first. Record what each does. **This check cannot fail either** — it is an
+      observation, and OQ-11 is the decision. What it must *not* do is get quietly fixed here.
+- **Close-out:** the reconciliation is unusual because most of it already landed with the code,
+  so the step is **re-reading what exists against what this round changed**, not writing it
+  fresh. `rules/session-commands.md` exists at 44/55 lines — it is checked against the
+  round's outcome and against checks 3–8, and it is the file that must absorb anything OQ-11
+  turns into. It is at **48/55** lines after the review round corrected it: it had quoted a
+  one-shot failure as `oko: jump failed: …`, where `Cmd::what`'s prefix is applied in
+  `Watcher::run` and never on this path, so the real string names the operation. That is the
+  case for re-reading a rule that landed with its code rather than assuming it —
+  **a rule written alongside an implementation is not thereby checked against it** — and check
+  6 now records the strings so the next drift is caught by the gate.
+  `rules/follow-stream.md` is at 85/85, exactly at its cap, so
+  **any further clause there raises the cap or cuts a line, deliberately, and says which** —
+  the same rule Phases 2, 3, 4 and 5 each met. `rules/dashboard-ui.md` is the one nobody wrote:
+  it declares `src/main.rs` among its `sources` and its "How rows stay true" paragraph says
+  `run` has **a** second entry point, naming `--follow`. `run` now takes **three** branches
+  before the dashboard — `--version`, `--follow`, and `parse_command`'s pair — and that
+  sentence is *incomplete* in precisely the way round 4 of Phase 5 corrected it into being
+  complete. **One clause and a pointer to `session-commands.md`**, taken as a net one line: it
+  fit the headroom, so neither a raise nor a cut was needed, and the file now sits at
+  **112/112**. The next change there is the one that raises or cuts, and it inherits that
+  choice from this phase rather than meeting it fresh. `README.md` is re-read, not
+  rewritten. **The `CLAUDE.md` observable line is re-read and the expected answer is "no
+  change"** — the observable ends "jumping focus to the row you press Enter on", and this phase
+  adds a caller for that jump rather than a new thing a human sees; if the round disagrees, the
+  line changes and the reason is recorded. Raises OQ-10, OQ-11 and OQ-12 and resolves none —
+  though not for the same reason each: checks 10 and 11 were run in the review round and their
+  numbers are folded into the first two, closing OQ-10's cost half and putting OQ-11's
+  cross-window behaviour beyond argument, while both keep a decision open. OQ-12 needs a
+  measurement this phase does not take.
+  Commit plan: **one push to `feat/cli-entry-points`** — the spec and review-record commit on
+  top of the two that exist, plus whatever the round's findings and the reconciliation require
+  — and the PR leaves draft when the round converges, which is the gate the push is the unit
+  for.

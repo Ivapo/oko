@@ -87,9 +87,10 @@ Three threads meeting on one channel of `AppEvent` (`src/main.rs:run`): the watc
 the socket and every conversation with iTerm2, one blocks in `event::read`, and the main
 thread only draws. Quitting drops the receivers, which is what stops the other two.
 Connecting happens **before** `ratatui::init()`, so an API-off failure is a readable
-message rather than something that flashes between init and restore. `run` has a **second
-entry point** ahead of all of it: `--follow` returns into `src/follow.rs` and none of this
-runs — see `follow-stream.md`.
+message rather than something that flashes between init and restore. **Three branches sit
+ahead of all of it** and none of this runs for any of them: `--version` answers and returns
+before even the connection, `--follow` returns into `src/follow.rs` (`follow-stream.md`), and
+`--activate`/`--set-name` connect, run one `Cmd` and exit (`session-commands.md`).
 
 Nothing polls iTerm2. A variable-change notification patches one field of one row; a layout
 change rebuilds the shape from the `ListSessionsResponse` it carries and fetches variables
