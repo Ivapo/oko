@@ -640,7 +640,7 @@ indistinguishable from a bug in itself. So `--version` answers **ahead of every 
 
 **How expensive the fall-through is, stated as what was actually measured.** One `--activate`
 against a live window costs ~120 ms (Phase 6, check 10); `--version` on the same build returns
-in 13–15 ms. The difference — **103–111 ms** — is *everything a command does beyond printing a
+in 2–3 ms. The difference — **113–122 ms** — is *everything a command does beyond printing a
 version*, which is the `osascript` cookie, the handshake, `list_sessions`,
 `resolve_own_session`, `rescan`'s per-session variable fetch and subscriptions, and then the
 one request. **That subtraction does not isolate the connection from the rest**, and saying it
@@ -977,11 +977,14 @@ reader that draws, and the writer is gone by the time the reader hears about it.
   that does not build a watcher", which is a different shape.
 
   **The number is in, and it answers half the question.** Gate check 10, measured 2026-08-17
-  against a live four-tab window: one `oko --activate` costs **126 / 127 / 116 ms**, and
-  `oko --version` on the same build costs **13–15 ms**. That is comfortably a keypress, and the
-  cost half of this question closes: **a command per action is affordable, recorded, and not to
-  be optimised on suspicion.** **What the subtraction does *not* give is a breakdown**: the
-  103–111 ms between the two covers the cookie, the handshake, `list_sessions`,
+  against a live window, five runs each: one `oko --activate` costs **116–124 ms** (median
+  117), and `oko --version` on the same build **2–3 ms**. That is comfortably a keypress, and
+  the cost half of this question closes: **a command per action is affordable, recorded, and
+  not to be optimised on suspicion.** (An earlier sample put `--version` at 13–15 ms; that was
+  a binary straight off a rebuild and not yet in the page cache. The figure a consumer meets
+  repeatedly is the warm one, and either way the *difference* is what this question turns on.)
+  **What the subtraction does *not* give is a breakdown**: the
+  113–122 ms between the two covers the cookie, the handshake, `list_sessions`,
   `resolve_own_session`, `rescan` and its per-session subscriptions, and the request itself,
   all together. Anyone reaching for the first remedy below needs that split and does not have
   it — measuring it is the first step of acting on this question, not a step that was skipped

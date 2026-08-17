@@ -2,7 +2,7 @@
 //!
 //! One row per session (§2.8), scoped to the window Oko itself is in, ordered by tab index
 //! then position within the tab. The rows track reality by **subscription, not polling**
-//! (OQ-3), and it takes two kinds:
+//! (OQ-3), and it takes three kinds:
 //!
 //! - `NOTIFY_ON_VARIABLE_CHANGE`, per session *and* per variable, for `path` and `jobName`.
 //!   A session that appears later is covered only if it is subscribed on arrival.
@@ -10,6 +10,9 @@
 //!   session, terminates none and changes no session variable, so this is the only event
 //!   that makes the `tab` column live — and its payload is a whole `ListSessionsResponse`,
 //!   so the new shape arrives inside the notification.
+//! - `NOTIFY_ON_NEW_SESSION`, because the two above do not cover a tab **opening**. Measured
+//!   rather than inferred: opening fires this and no layout change, closing fires the layout
+//!   change and not this. It carries an id and nothing else, so the list is fetched.
 //!
 //! The status column has no subscription to hang on, because it comes from a directory of
 //! files rather than from iTerm2. It rides the tick this loop already wakes on: one `stat`
