@@ -35,7 +35,7 @@ phases:
     by: null
   - name: "Phase 6 — acting on a row from outside the dashboard"
     reviewed: 2026-08-17
-    shipped: null
+    shipped: 2026-08-17
     cut: null
     by: null
 
