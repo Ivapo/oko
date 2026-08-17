@@ -174,7 +174,10 @@ impl Watcher {
         // that died while Oko was closed is cleaned up here, where no hook ever ran for it.
         watcher.status.refresh();
         watcher.rescan(&list)?;
+        // Both, because neither covers the other: closing a tab fires the
+        // layout change, opening one fires only the new-session.
         watcher.client.subscribe(NotificationType::NotifyOnLayoutChange, None)?;
+        watcher.client.subscribe(NotificationType::NotifyOnNewSession, None)?;
         watcher.client.set_read_timeout(IDLE_TICK)?;
         watcher.emitted = watcher.snapshot();
         Ok(watcher)
@@ -332,6 +335,17 @@ impl Watcher {
             && let Some(list) = &layout.list_sessions_response
         {
             self.rescan(list)?;
+            return Ok(());
+        }
+
+        // A tab **opening** fires only this one — measured, not inferred: iTerm2
+        // sends `NotifyOnNewSession` for it and no layout change, while closing
+        // one sends the layout change and no new-session. Subscribing to layout
+        // alone is why a new tab used to never appear while a closed one left
+        // at once. It carries an id and nothing else, so the list is fetched.
+        if n.new_session_notification.is_some() {
+            let list = self.client.list_sessions()?;
+            self.rescan(&list)?;
         }
 
         Ok(())

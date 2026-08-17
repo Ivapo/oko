@@ -105,7 +105,8 @@ built-in one, which is what lets two Oko instances see one name with no protocol
 them.
 Subscriptions deliver `NOTIFY_ON_VARIABLE_CHANGE` (per session *and* variable),
 `NOTIFY_ON_NEW_SESSION`, `NOTIFY_ON_TERMINATE_SESSION`, `NOTIFY_ON_LAYOUT_CHANGE`.
-Oko subscribes `path`, `jobName` and `user.okoName` per session (`ROW_VARS`), plus layout. A
+Oko subscribes `path`, `jobName` and `user.okoName` per session (`ROW_VARS`), plus layout
+and new-session. A
 session created after subscribing is not covered by the per-session ones, so it must be
 subscribed when its notification arrives. **The two variables have different latencies.**
 `jobName` is poll-driven: a 5.000 s `sleep` produced its two notifications 5.602 s apart.
@@ -118,5 +119,8 @@ so neither can place a session. `LayoutChangedNotification` carries a whole
 `ListSessionsResponse`, delivering the new shape of every window inline, and measured
 2026-08-15 it fires for a pane split, a tab drag and a tab close alike — a drag creating no
 session, terminating none and changing no variable, so it is the only event that carries
-one. A client subscribed to it and to `NOTIFY_ON_VARIABLE_CHANGE` needs neither session
-notification.
+one. It does **not** fire for a tab *opening*: measured 2026-08-16, that sends
+`NewSessionNotification` and nothing else, and the earlier reading that layout change made
+the session notifications redundant was drawn from events that all happened to be closes.
+A client that wants new tabs subscribes to both and calls `ListSessions` itself when the
+session notification arrives, since that payload cannot place anything on its own.
