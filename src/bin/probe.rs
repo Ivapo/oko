@@ -7,10 +7,12 @@
 //!     probe activate <session>   focus that session, its tab, and its window
 //!     probe watch                print notifications as they arrive
 //!
-//! `watch` deliberately subscribes to **more** than the dashboard does — new-session and
-//! terminate-session as well as layout-change — because its job is to show which
-//! notification actually fires for an event, which is the one thing the dashboard's design
-//! infers rather than measures.
+//! `watch` deliberately subscribes to **more** than the dashboard does — terminate-session
+//! as well as layout-change and new-session — because its job is to show which notification
+//! actually fires for an event, which is the one thing the dashboard's design infers rather
+//! than measures. That was not an idle worry: the dashboard subscribed to layout-change
+//! alone until `e05bf6a`, on an inference this command disproved — a tab *opening* fires
+//! new-session and no layout change — so it is one subscription closer to this one now.
 //!
 //! Setup — enabling the API, authorizing a client — is in `rules/iterm-api.md`.
 

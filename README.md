@@ -103,8 +103,8 @@ send its errors to `~/.oko/hook.log`.
 ## Running it
 
 ```sh
-cargo build --release
-./target/release/oko
+cargo install --path .          # if you have not already, for the status column
+oko
 ```
 
 **Start it from a tab of the window you want watched.** Oko shows the window it is itself a
@@ -176,8 +176,8 @@ what `◌ stale` is for.
 ## Diagnostics
 
 ```sh
-./target/release/probe          # identity, then the sessions of this window, headless
-./target/release/probe watch    # print iTerm2 notifications as they arrive
+probe                           # identity, then the sessions of this window, headless
+probe watch                     # print iTerm2 notifications as they arrive
 ```
 
 `probe watch` subscribes to more than the dashboard does, so when something does not update
@@ -189,8 +189,8 @@ Oko was built spec-first, and the documents are part of the repo rather than an 
 
 - **[`specs/`](specs/)** — *why* each decision was made, and the plan. Append-only once
   accepted, so a wrong turn stays visible with the correction beside it.
-  [`specs/reviews/oko-001.md`](specs/reviews/oko-001.md) is the review record: sixteen rounds
-  across five phases, every blocking finding and what it cost.
+  [`specs/reviews/oko-001.md`](specs/reviews/oko-001.md) is the review record: eighteen rounds
+  across six phases, every blocking finding and what it cost.
 - **[`rules/`](rules/)** — *what is true right now*, tracking the code and corrected against
   it. [`iterm-api.md`](rules/iterm-api.md) is the one worth reading if you want to talk to
   iTerm2 yourself: the endpoint, the authorization dance, the join key, and the measured
