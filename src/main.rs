@@ -4,8 +4,12 @@
 //! terminal input; the main thread draws and does nothing else. They meet on one channel,
 //! so a keystroke and a notification arrive at the table the same way.
 //!
+//! **`--follow` is a second entry point**, taken before any of that: the same rows as a JSON
+//! stream for another program to draw, with no terminal involved at all (`src/follow.rs`).
+//!
 //! The API must be enabled once per machine — see `README.md` and `rules/iterm-api.md`.
 
+mod follow;
 mod ui;
 
 use std::sync::mpsc;
@@ -28,6 +32,12 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    // Before `ratatui::init()`, and before the connection: the stream mode owns no terminal
+    // and shares nothing with the dashboard's path but this line.
+    if std::env::args().skip(1).any(|arg| arg == "--follow") {
+        return follow::run(ADVISORY_NAME);
+    }
+
     // Connect before the alternate screen exists: "the API is off" is a message a human
     // acts on, and it would otherwise flash past between init and restore.
     let watcher = Watcher::connect(ADVISORY_NAME)?;
