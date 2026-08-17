@@ -38,8 +38,10 @@ the table, prefixed by `Cmd::what` — `jump` or `rename`.
 | `oko --set-name <session>` | **clears** it — the only way back to the derived default |
 
 The clearing spelling is the absence of an argument rather than an empty string, matching
-`Cmd::Rename(_, None)`: `""` would read back as a name and render blank, and no further
-rename could escape it.
+`Cmd::Rename(_, None)`: `""` would read back as a name and render blank. An explicitly empty
+or all-whitespace name clears too — `parse_command` trims and maps empty to `None`, which is
+what `src/ui.rs:on_key_editing` does with the editor's buffer, so neither door can reach a
+blank name.
 
 Session ids are the ones `--follow` publishes. That is the whole join: the stream names what
 a consumer keys a card on, and these take that key.
@@ -52,5 +54,7 @@ pipe, one writer — so a consumer that wants to act spawns a second, short-live
 rather than the stream growing a request channel and, with it, a reason for the reader to
 write back.
 
-Errors surface as a non-zero exit and one line on stderr: `oko: jump failed: BadIdentifier`
+Errors surface as a non-zero exit and one line on stderr: `oko: activate failed: BadIdentifier`
 for an id that no longer exists, which is what a stale card looks like from the caller's side.
+**`Cmd::what`'s `jump`/`rename` prefix is the dashboard's**, applied in `Watcher::run` — a
+one-shot failure carries the wording of the operation that failed instead.
