@@ -10,3 +10,5 @@
   the JSON stream `oko --follow` writes — its header and schema, the shape of a line and where each field comes from, what it deliberately omits, the rule that keeps it quiet, the keepalive and the three ways the process ends
 - **[iterm-api](iterm-api.md)** — generated 2026-08-16 · 3 sources · 113/115 lines
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables it reads, writes and watches, the operations and the subscriptions
+- **[session-commands](session-commands.md)** — generated 2026-08-16 · 2 sources · 44/55 lines
+  the two things Oko does *to* a session — jump focus and set a name — the one place both are carried out, the two entry points that reach it, how the CLI spells them and what an absent name means, and why acting is a separate invocation from watching
