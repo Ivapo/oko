@@ -8,5 +8,5 @@
   the dashboard Oko draws — its columns and where each value comes from, the keys it answers to, the one modal state it has, how a selection survives a changing row set, and the path by which rows track the window without polling
 - **[follow-stream](follow-stream.md)** — generated 2026-08-16 · 3 sources · 82/85 lines
   the JSON stream `oko --follow` writes — its header and schema, the shape of a line and where each field comes from, what it deliberately omits, the rule that keeps it quiet, the keepalive and the three ways the process ends
-- **[iterm-api](iterm-api.md)** — generated 2026-08-16 · 3 sources · 109/115 lines
+- **[iterm-api](iterm-api.md)** — generated 2026-08-16 · 3 sources · 113/115 lines
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables it reads, writes and watches, the operations and the subscriptions
