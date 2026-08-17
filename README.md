@@ -172,8 +172,8 @@ Oko was built spec-first, and the documents are part of the repo rather than an 
 
 - **[`specs/`](specs/)** — *why* each decision was made, and the plan. Append-only once
   accepted, so a wrong turn stays visible with the correction beside it.
-  [`specs/reviews/oko-001.md`](specs/reviews/oko-001.md) is the review record: twelve rounds
-  across four phases, every blocking finding and what it cost.
+  [`specs/reviews/oko-001.md`](specs/reviews/oko-001.md) is the review record: sixteen rounds
+  across five phases, every blocking finding and what it cost.
 - **[`rules/`](rules/)** — *what is true right now*, tracking the code and corrected against
   it. [`iterm-api.md`](rules/iterm-api.md) is the one worth reading if you want to talk to
   iTerm2 yourself: the endpoint, the authorization dance, the join key, and the measured
