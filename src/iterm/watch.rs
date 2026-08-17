@@ -122,6 +122,16 @@ pub enum Cmd {
     Rename(String, Option<String>),
 }
 
+impl Cmd {
+    /// What to call this in an error message.
+    pub fn what(&self) -> &'static str {
+        match self {
+            Cmd::Activate(_) => "jump",
+            Cmd::Rename(..) => "rename",
+        }
+    }
+}
+
 /// A session and where it sits: which window, and which tab of it.
 #[derive(Clone, Debug)]
 pub struct Placed {
@@ -219,16 +229,10 @@ impl Watcher {
             // Commands first: a keystroke should not wait behind an idle read.
             loop {
                 match cmds.try_recv() {
-                    Ok(Cmd::Activate(id)) => {
-                        if let Err(e) = self.client.activate(&id)
-                            && !emit(Event::Error(format!("jump failed: {e:#}")))
-                        {
-                            return;
-                        }
-                    }
-                    Ok(Cmd::Rename(id, name)) => {
-                        if let Err(e) = self.rename(&id, name)
-                            && !emit(Event::Error(format!("rename failed: {e:#}")))
+                    Ok(cmd) => {
+                        let what = cmd.what();
+                        if let Err(e) = self.execute(cmd)
+                            && !emit(Event::Error(format!("{what} failed: {e:#}")))
                         {
                             return;
                         }
@@ -280,6 +284,18 @@ impl Watcher {
         self.emitted = snapshot.clone();
         log_emit(self.emits_log.as_deref());
         emit(Event::Snapshot(snapshot))
+    }
+
+    /// Runs one command against the connection.
+    ///
+    /// Public because the dashboard is not the only caller: a one-shot
+    /// invocation does the same thing without a loop or a terminal, and both
+    /// have to write the same variable and touch the same row to do it.
+    pub fn execute(&mut self, cmd: Cmd) -> Result<()> {
+        match cmd {
+            Cmd::Activate(id) => self.client.activate(&id),
+            Cmd::Rename(id, name) => self.rename(&id, name),
+        }
     }
 
     /// Sets a row's name on the session itself, or clears it.

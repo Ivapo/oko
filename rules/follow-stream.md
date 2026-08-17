@@ -91,8 +91,8 @@ action match, and redraw the dashboard ten times a second forever.
 
 Stdout carries the header, snapshots and keepalives, and nothing else, ever. Two threads write
 it, so the handle is `Stdout` and **never** a `StdoutLock`: `writeln!` takes the internal lock
-per call, and hoisting it out of the loop starves the keepalive and restores the orphan it
-exists to prevent.
+per call, and hoisting it out starves the keepalive and restores the orphan it prevents.
 
 `--follow` sends no `Cmd`; it holds a live sender only because `Watcher::run` returns at once
-on a disconnected channel. Nothing here lets a consumer act on a session — it reports.
+on a disconnected channel. Nothing *here* lets a consumer act on a session — it reports, and
+`rules/session-commands.md` is where acting on what it drew lives.

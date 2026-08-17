@@ -15,10 +15,10 @@ mod ui;
 use std::sync::mpsc;
 use std::thread;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ratatui::crossterm::event;
 
-use oko::iterm::Watcher;
+use oko::iterm::{Cmd, Watcher};
 use ui::AppEvent;
 
 /// The name iTerm2 shows in its API console and keeps in its permissions list.
@@ -29,6 +29,30 @@ fn main() {
         eprintln!("oko: {e:#}");
         std::process::exit(1);
     }
+}
+
+/// `--activate <session>` jumps focus to a session; `--set-name <session>
+/// [name]` names one, and clears it when the name is left off — which is the
+/// only way back to the derived default, the same as in the dashboard.
+///
+/// Session ids are the ones `--follow` publishes, which is the whole point:
+/// the stream says what a consumer keys a card on, and these take that key.
+fn parse_command(args: &[String]) -> Result<Option<Cmd>> {
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--activate" => {
+                let id = rest.next().context("--activate needs a session id")?;
+                return Ok(Some(Cmd::Activate(id.clone())));
+            }
+            "--set-name" => {
+                let id = rest.next().context("--set-name needs a session id")?;
+                return Ok(Some(Cmd::Rename(id.clone(), rest.next().cloned())));
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
 }
 
 fn run() -> Result<()> {
@@ -46,6 +70,15 @@ fn run() -> Result<()> {
     // and shares nothing with the dashboard's path but this line.
     if std::env::args().skip(1).any(|arg| arg == "--follow") {
         return follow::run(ADVISORY_NAME);
+    }
+
+    // The two things the dashboard can do, reachable without one — so a
+    // program drawing the stream can act on what it drew instead of telling
+    // the user to come back here and press a key.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(cmd) = parse_command(&args)? {
+        let mut watcher = Watcher::connect(ADVISORY_NAME)?;
+        return watcher.execute(cmd);
     }
 
     // Connect before the alternate screen exists: "the API is off" is a message a human

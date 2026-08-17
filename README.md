@@ -139,6 +139,23 @@ that wants Oko *optionally* can spawn it, read it, and drop it. Errors go to std
 carries the protocol and nothing else. The full contract is in
 [`rules/follow-stream.md`](rules/follow-stream.md).
 
+`oko --version` prints a version and exits without touching iTerm2, so a consumer can tell a
+build that speaks this from one that does not — being on `PATH` does not settle it.
+
+## Acting on a row from another program
+
+The stream reports; these two do what the table's `↵` and `r` do, without the table:
+
+```sh
+oko --activate <session-id>          # jump focus to that tab
+oko --set-name <session-id> <name>   # name it
+oko --set-name <session-id>          # clear the name, back to the derived default
+```
+
+Session ids are the ones `--follow` publishes — that is the join. Each connects, does the one
+thing, and exits; a failure is a non-zero status and one line on stderr. Details in
+[`rules/session-commands.md`](rules/session-commands.md).
+
 ## What it does not do
 
 **Oko never spawns, kills, resizes or configures anything**, and there is no driving a
