@@ -30,7 +30,7 @@ phases:
     by: null
   - name: "Phase 5 — a stream another program can draw"
     reviewed: 2026-08-16
-    shipped: null
+    shipped: 2026-08-16
     cut: null
     by: null
 

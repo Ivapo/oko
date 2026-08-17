@@ -4,7 +4,9 @@
 
 - **[claude-status](claude-status.md)** — generated 2026-08-16 · 3 sources · 121/124 lines
   how a Claude Code tab reports what it is doing — the hook binary and the events it answers to, the status file's path and format, the identity join to a row, the two clocks a value ages on, what deletes a file, and the holes that remain
-- **[dashboard-ui](dashboard-ui.md)** — generated 2026-08-16 · 4 sources · 109/112 lines
+- **[dashboard-ui](dashboard-ui.md)** — generated 2026-08-16 · 4 sources · 111/112 lines
   the dashboard Oko draws — its columns and where each value comes from, the keys it answers to, the one modal state it has, how a selection survives a changing row set, and the path by which rows track the window without polling
+- **[follow-stream](follow-stream.md)** — generated 2026-08-16 · 3 sources · 82/85 lines
+  the JSON stream `oko --follow` writes — its header and schema, the shape of a line and where each field comes from, what it deliberately omits, the rule that keeps it quiet, the keepalive and the three ways the process ends
 - **[iterm-api](iterm-api.md)** — generated 2026-08-16 · 3 sources · 109/115 lines
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables it reads, writes and watches, the operations and the subscriptions

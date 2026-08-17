@@ -120,6 +120,25 @@ leave open.
 
 Enter changes which tab is focused and nothing else: nothing is typed into the target pane.
 
+## Reading the rows from another program
+
+```sh
+oko --follow          # newline-delimited JSON on stdout, no terminal involved
+```
+
+The first line names the build and the schema — `{"oko":"0.1.0","schema":1}` — and every line
+after it is one snapshot: `window_number`, and a `rows` array carrying `session_id`, `tab`,
+`name`, `path`, `status` and `age`, plus `claude: true` for a Claude row or `job` for a plain
+one. Ages are the same buckets the table shows, never a second count, and a line identical to
+the one before it is not written, so the stream is as quiet as the dashboard is.
+
+**Three promises to a consumer.** It opens with the current state rather than waiting for
+something to move; a `schema` you do not recognise means show nothing rather than a half-drawn
+card; and closing your end of the pipe stops the writer within a few seconds, so a consumer
+that wants Oko *optionally* can spawn it, read it, and drop it. Errors go to stderr and stdout
+carries the protocol and nothing else. The full contract is in
+[`rules/follow-stream.md`](rules/follow-stream.md).
+
 ## What it does not do
 
 **Oko never spawns, kills, resizes or configures anything**, and there is no driving a
