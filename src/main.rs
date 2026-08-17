@@ -47,7 +47,13 @@ fn parse_command(args: &[String]) -> Result<Option<Cmd>> {
             }
             "--set-name" => {
                 let id = rest.next().context("--set-name needs a session id")?;
-                return Ok(Some(Cmd::Rename(id.clone(), rest.next().cloned())));
+                // Trimmed, and an empty name clears rather than blanking — exactly what the
+                // dashboard's editor does (`src/ui.rs:on_key_editing`). The two doors open
+                // onto the same two things or they are not the same two things: `""` would
+                // decode back through `decode_json_value` as `Some("")` and render a blank
+                // name, which is the state §2.10 calls a trap and which no key can produce.
+                let name = rest.next().map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+                return Ok(Some(Cmd::Rename(id.clone(), name)));
             }
             _ => {}
         }
@@ -107,4 +113,60 @@ fn run() -> Result<()> {
     let result = ui::run(&mut terminal, &events_rx, &commands_tx, initial);
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Option<Cmd>> {
+        parse_command(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>())
+    }
+
+    /// `Cmd` derives only `Clone` and `Debug`, and adding `PartialEq` to the library for a
+    /// binary's tests is the kind of thing `--follow` already declined to do for `serde`.
+    fn renamed(args: &[&str]) -> Option<String> {
+        match parse(args).expect("a well-formed rename parses") {
+            Some(Cmd::Rename(_, name)) => name,
+            other => panic!("expected a rename, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn activate_takes_the_session_id_that_follows_it() {
+        let Some(Cmd::Activate(id)) = parse(&["--activate", "F79BC39C"]).unwrap() else {
+            panic!("expected an activate");
+        };
+        assert_eq!(id, "F79BC39C");
+    }
+
+    #[test]
+    fn set_name_takes_a_name_and_trims_it() {
+        assert_eq!(renamed(&["--set-name", "F79BC39C", "api work"]), Some("api work".into()));
+        assert_eq!(renamed(&["--set-name", "F79BC39C", "  api work  "]), Some("api work".into()));
+    }
+
+    #[test]
+    fn an_absent_or_empty_name_clears() {
+        // The three spellings a caller might reach for, and all of them mean the same thing
+        // the dashboard's editor means by an empty buffer (`src/ui.rs:on_key_editing`). `""`
+        // must not survive as a name: it would render blank and no rename could escape it.
+        assert_eq!(renamed(&["--set-name", "F79BC39C"]), None);
+        assert_eq!(renamed(&["--set-name", "F79BC39C", ""]), None);
+        assert_eq!(renamed(&["--set-name", "F79BC39C", "   "]), None);
+    }
+
+    #[test]
+    fn a_flag_with_no_session_id_is_an_error_rather_than_a_dashboard() {
+        // Falling through to `run`'s dashboard would put ratatui on whatever stdout is, which
+        // is the failure `--version` exists to keep a consumer out of.
+        assert!(parse(&["--activate"]).is_err());
+        assert!(parse(&["--set-name"]).is_err());
+    }
+
+    #[test]
+    fn nothing_recognised_is_not_a_command() {
+        assert!(parse(&[]).unwrap().is_none());
+        assert!(parse(&["--follow"]).unwrap().is_none());
+    }
 }
