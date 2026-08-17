@@ -32,6 +32,16 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    // Ahead of everything, and cheapest of all: a consumer deciding whether this binary
+    // speaks `--follow` should not have to spawn a stream and an iTerm2 connection to find
+    // out. Falling through to the dashboard on an unrecognised flag makes the question
+    // unanswerable — with a pipe for stdout that path panics inside `ratatui::init()`, so
+    // what the caller learns is a dead child and an escape sequence.
+    if std::env::args().skip(1).any(|arg| arg == "--version" || arg == "-V") {
+        println!("oko {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     // Before `ratatui::init()`, and before the connection: the stream mode owns no terminal
     // and shares nothing with the dashboard's path but this line.
     if std::env::args().skip(1).any(|arg| arg == "--follow") {

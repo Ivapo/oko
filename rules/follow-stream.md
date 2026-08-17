@@ -20,7 +20,10 @@ before `ratatui::init()` and before connecting, and nothing in this mode touches
 
 It is a **separate process and a serialized interface** rather than a crate other programs
 link, because the feature has to degrade to nothing: no Oko installed, no card view and no
-error. The whole contract is that a binary named `oko` may be on `PATH`, and what follows.
+error. The whole contract is that a binary named `oko` may be on `PATH`, and what follows —
+plus `oko --version`, ahead of every other branch (`src/main.rs:run`), because presence is
+not capability: a build predating this mode falls through to the dashboard, and on a pipe
+that path panics inside `ratatui::init()` rather than reporting anything.
 
 ## The header
 
