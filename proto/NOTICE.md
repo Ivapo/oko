@@ -28,3 +28,11 @@ change is a visible diff.
 Oko's own source is MIT (see `../LICENSE`). This file is not. Consult iTerm2's licence
 directly for what its terms require of you — this notice records provenance, and is not
 legal advice.
+
+**Oko is published to crates.io as `oko-iterm2`, declaring `MIT AND GPL-2.0`.** That
+expression describes what the tarball contains rather than choosing between the two:
+`cargo package` includes this directory, so `api.proto` ships inside the crate. Installing
+and running the binaries distributes nothing; taking a *library* dependency on the crate
+links this file's generated schema into another artifact. `oko --licenses` prints the five
+facts above from an installed copy, since neither this file nor `LICENSE` lands anywhere a
+person who typed `cargo install` will look.

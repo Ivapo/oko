@@ -8,7 +8,7 @@ covers: >
   the JSON stream `oko --follow` writes — its header and schema, the shape of a line and
   where each field comes from, what it deliberately omits, the rule that keeps it quiet, the
   keepalive and the three ways the process ends
-max_lines: 85
+max_lines: 88
 generated: 2026-08-16
 ---
 
@@ -21,9 +21,11 @@ before `ratatui::init()` and before connecting, and nothing in this mode touches
 It is a **separate process and a serialized interface** rather than a crate other programs
 link, because the feature has to degrade to nothing: no Oko installed, no card view and no
 error. The whole contract is that a binary named `oko` may be on `PATH`, and what follows —
-plus `oko --version`, ahead of every other branch (`src/main.rs:run`), because presence is
-not capability: a build predating this mode falls through to the dashboard, and on a pipe
-that path panics inside `ratatui::init()` rather than reporting anything.
+plus `oko --version`, first of the branches answered ahead of the connection
+(`src/main.rs:run`), because presence is not capability: a build predating this mode falls
+through to the dashboard, and on a pipe that path panics inside `ratatui::init()` rather
+than reporting anything. Such a build is exactly what the probe catches — a *current* Oko
+refuses an unknown flag with exit 2 instead.
 
 ## The header
 
