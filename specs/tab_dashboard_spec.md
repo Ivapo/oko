@@ -43,6 +43,11 @@ phases:
     shipped: 2026-09-02
     cut: null
     by: null
+  - name: "Phase 8 — the binaries are the product: no library surface in the published crate"
+    reviewed: 2026-09-02
+    shipped: 2026-09-02
+    cut: null
+    by: null
 
 extends: null
 supersedes: null
@@ -558,6 +563,16 @@ nothing in it lets a consumer act on a session except by reading. §2.6 rejected
 because a split pane lives in one tab and would need one copy per tab; a separate program
 reading a stream is not that, so that argument does not reach this.
 
+**CORRECTED 2026-09-02 (Phase 8).** One sentence above describes a thing that no longer
+exists: `src/lib.rs` does *not* expose `iterm` and `status`, because there is no library
+target at all — panex-tui **could not** depend on the `oko` crate today, and neither could
+anyone else (§2.16, OQ-13). **The decision this paragraph records is untouched, and that is
+the point of correcting it here rather than striking it**: the argument was that a
+compile-time dependency has no absence to degrade to, and Phase 8 agrees with it hard enough
+to remove the dependency's *possibility*. What went stale is the premise the argument was
+made against, not the argument. Left in place because a reader meeting "could depend on the
+`oko` crate" needs to know it is no longer true where they read it.
+
 **CORRECTED 2026-08-17 (Phase 6).** Two sentences above are now misleading, and in opposite
 directions — one understates the contract, the other overstates the conclusion.
 
@@ -786,6 +801,63 @@ Oko's own table. **Oko stays macOS-only and stays honest about it** — `src/ite
 shells to `/usr/bin/osascript` and reads `~/Library/Application Support`, so the crate builds
 on Linux and cannot work there. That is a `README` and metadata problem, not a code one, and
 it is the second thing a stranger needs to learn before the first `cargo install`.
+
+### 2.16 The binaries are the product (decision, recorded — added by Phase 8)
+
+§2.13 turned down a library *for consumers* — "a stream, not a library" — on the argument
+that a stream degrades to nothing and a linked dependency cannot. Phase 7 then published a
+crate that ships one anyway, because `src/lib.rs` exists and `cargo` publishes what the
+package contains. **The same argument reaches the distribution, and OQ-13 is where it was
+parked.** It is resolved: the published crate exposes no library surface, and the binaries
+are the whole product.
+
+**Two costs were never accepted and would land on a stranger.** The licence: a binary user
+takes GPL-2.0 code onto their disk and runs it, which distributes nothing, while a crate
+*depending* on `oko-iterm2` links the generated schema into its own artifact — so §2.15's
+obligation falls on someone who wrote `oko-iterm2 = "0.2"` and read a one-line description.
+And semver: `Watcher::execute` went public in Phase 6 for one reason (§2.14, "two would
+drift") and `Client` has been reshaped in three phases. Nothing has ever promised that
+surface is stable, and publishing it is how such a promise gets made by accident.
+
+**Removing `pub` is not the mechanism, and this is the fact that makes Phase 8 a restructure
+rather than an edit.** A binary target consumes its own package's lib as an *external
+crate*, so `oko::iterm` and `oko::status` are public **because all three binaries require
+them to be** — eleven `use oko::…` sites across five files. Delete the `pub` and nothing
+compiles. The surface is not an oversight to be tightened; it is load-bearing for the build
+exactly as it stands.
+
+So the lib target goes, and the shared modules are included by each binary instead. **The
+price is not "three compilations" and the shared code is not 1,784 lines** — that figure
+counted `src/lib.rs`, which this phase deletes and which is therefore compiled zero times.
+Measured: `src/iterm/` is 1,106 lines and `src/status.rs` is 668, and **each binary takes
+only what it needs** — `oko` and `oko-probe` both, `oko-hook` only `status`. So 4,216 lines
+compile where 1,774 did, which is **2,442 extra**, not 3,548.
+
+`src/iterm/watch.rs` reaches `crate::status`, and that path keeps resolving inside a binary
+crate that declares both modules at its root, so the coupling survives the move untouched —
+**and it is why `oko-probe` declares `status` despite never naming it**: the module it does
+want depends on it. That is the one place "declare what you use" is not readable off the
+`use` lines.
+
+**This is not §6.1 step 1's "removes or contradicts shipped work", though it removes a line
+Phase 7 shipped.** `[lib] name = "oko"` was added for one reason — the package rename would
+otherwise have broken eleven imports — and §2.15 said in the same breath that naming the
+target *"does not settle OQ-13 by the back door"*, with Phase 7's scope parking the question
+as "raised by this phase and not settled in it". A deferred decision arriving is not a
+reversal, which is what makes this a phase rather than a `## 0.` closing note.
+
+**The rejected alternative is the one that looks cheaper and is the reason this is written
+down.** Marking both modules `#[doc(hidden)]` and documenting no semver promise costs one
+attribute and no restructure — and it is OQ-13's second answer, which that question already
+called *the weakest of the three, because a doc comment is not what `cargo update` reads*.
+The API would still be there, still linkable, still carrying the GPL-2.0 obligation to
+anyone who found it. It buys the appearance of the decision and none of it.
+
+**What this does not change.** No behaviour, for anyone: the dashboard, the stream and the
+three commands are byte-for-byte what Phase 7 shipped, and §1.1's non-goals are untouched.
+Nothing about the *repository* changes either — a contributor still reads one client in one
+place. What changes is what `cargo package` contains, which is the whole point and is why
+Phase 7 refused to bundle it (its gate would have measured two things at once).
 
 ## 3. Open questions
 
@@ -1219,7 +1291,23 @@ it is the second thing a stranger needs to learn before the first `cargo install
   of its own; adding a field a consumer must ignore is not a compatible extension when the
   consumer's contract is "a header you do not recognise draws nothing".
 
-- **OQ-13 — Should the library half be published at all?** *(design call — blocks nothing in
+- **OQ-13 — Should the library half be published at all?** **RESOLVED 2026-09-02, after
+  Phase 7's gate: no — the third answer, and §2.16 is the decision.** The published crate
+  exposes no library surface and the binaries are the product, which is §2.13's *a stream,
+  not a library* applied to the distribution rather than to the consumer. Phase 8 implements
+  it; **the mechanism is what that phase's review round settles**, not this resolution.
+
+  **Two things this question got right, and one it did not.** The costs are as stated — the
+  licence lands on a stranger who wrote one dependency line, and the semver promise gets made
+  by accident. And the test it named was the correct one: *what settles it is whether anyone
+  wants it*, and no consumer has asked in the two weeks since §2.13 turned one down.
+
+  **What it missed is that removing `pub` is not available.** A binary target consumes its
+  own package's lib as an external crate, so the surface is public *because the three
+  binaries require it* — eleven `use oko::…` sites across five files, and
+  `src/iterm/watch.rs` reaching `crate::status`. This question reads as though the third
+  answer were a matter of tightening visibility. It is a restructure, and that is why it is a
+  phase rather than a line in Phase 7's close-out. *(design call — blocks nothing in
   Phase 7, and decides who inherits §2.15's GPL-2.0 obligation)* The crate has a lib target.
   `src/lib.rs` exports `oko::iterm` and `oko::status`, and it exists because three binaries
   share one client — not because anyone asked for a library. Publishing it makes that internal
@@ -2252,3 +2340,163 @@ and check 1 deliberately installs from a packaged tarball rather than from this 
   PR leaves draft when the round converges. **`cargo publish` is not in this plan**: the
   branch ends at a verified tarball and a human presses the button, because the one thing
   crates.io does not offer is a second first release.
+
+### Phase 8 — the binaries are the product: no library surface in the published crate
+
+*Produces the observable: **no**, and the argument is Phase 7's with one word changed. That
+phase produced a second population; this one changes what that population **receives**, and
+for the person who types `cargo install oko-iterm2 && oko` the observable is identical by
+construction — same dashboard, same stream, same three commands, byte for byte. Who it is
+for is the person who would have written `oko-iterm2 = "0.2"` in a `[dependencies]` block:
+they now cannot, which is the product of the phase. **The risk that makes this worth stating
+is the inverse of Phase 7's**: that phase was metadata and could be done thoroughly with the
+install left broken; this one is a build restructure that can leave every check green while
+still shipping the surface it exists to remove. So the gate is built out of `cargo doc` and
+the packaged manifest rather than out of `cargo build`.*
+
+- **Scope.**
+  - **`src/lib.rs` is deleted, and `[lib]` leaves `Cargo.toml`.** Phase 7 added
+    `[lib] name = "oko"` for one reason — the package rename would otherwise have made it
+    `oko_iterm2` and broken eleven imports (§2.15) — and that reason dies with the target.
+    **The `[[bin]]` entries stay exactly as they are**: they name the binaries, which is a
+    different job and the one Phase 7 was actually right about.
+  - **Each binary declares at its own root only the modules it needs**, replacing
+    `use oko::…`. **Which ones, stated rather than left to the plural:**
+
+    | Binary | Declares | Why |
+    |---|---|---|
+    | `oko` (`src/main.rs`) | `iterm`, `status` | `src/ui.rs` and `src/follow.rs` use both |
+    | `oko-hook` | `status` **only** | it has no `iterm` reference at all |
+    | `oko-probe` | `iterm`, **and `status`** | it never names `status`, but `src/iterm/watch.rs` reaches `crate::status` |
+
+    **`oko-probe`'s second module cannot be read off that file's `use` lines**, which is
+    why the table states it — but the compiler names it immediately and precisely if it is
+    missed (`could not find 'status' in the crate root`, pointing at `watch.rs`), so it costs
+    a build rather than a wrong artifact. **The error worth a gate is the other one**: an
+    `oko-hook` given an `iterm` it never uses compiles perfectly and is invisible except in
+    the test count, which is what check 3 is keyed to.
+    The two module trees (`src/iterm/`, `src/status.rs`) **do not move** — they are reached
+    by `#[path]`, which is what keeps this a build change rather than a code change.
+  - **Eleven `use oko::…` sites across five files** become plain `use crate::…` or `use
+    iterm::…`: `src/main.rs`, `src/ui.rs`, `src/follow.rs`, `src/bin/oko-hook.rs`,
+    `src/bin/oko-probe.rs`. Two further mentions are doc comments (the same eleven-real,
+    thirteen-total split §2.15 measured for the rename). **One of the eleven is not a `use`
+    at all** — `src/bin/oko-hook.rs:log_debug` calls `oko::status::oko_dir()` as an inline path —
+    so "rewrite the `use` lines" does not describe the whole set.
+  - **The shared modules take a file-level `#![allow(dead_code)]`, and this is a cost rather
+    than a tidy-up.** A binary crate seeds dead-code analysis from `main`, not from `pub`, so
+    every shared item a given binary does not reach becomes a warning: **measured at 10, 14
+    and 36 for `oko`, `oko-hook` and `oko-probe`** (round 1, in a scratch implementation).
+    `pub mod` does not help and `#[allow(…)]` on the `mod` *declaration* was measured not to
+    reach `src/status.rs`'s. The attribute is `#![allow(dead_code)]` at the head of `src/status.rs`
+    and **`#![allow(dead_code, unused_imports)]`** at the head of `src/iterm/mod.rs`. **The
+    second lint is required rather than conditional, and only there**: `mod.rs`'s
+    `pub use client::{…}` and `pub use watch::{…}` stop being public API the moment the
+    module lives inside a bin crate, and with `dead_code` alone `oko` and `oko-probe` each
+    fail `-D warnings` with two errors from exactly those lines (`oko-hook` is clean, since
+    no re-export reaches it). Measured in round 2, against a build. **This is the
+    phase's real regression**: three binaries lose dead-code cover over 1,774 lines, and
+    nothing here buys it back. Recorded so it is a decision rather than a side effect.
+  - **The 17 lib tests do not stay put, and the arithmetic is 48, not a round multiple.**
+    `src/status.rs` carries 14 and `src/iterm/watch.rs` carries 3, and each is compiled into
+    every binary that declares it — so the shared tests run **17 + 14 + 17 = 48** times, the
+    middle term being `oko-hook`, which takes `status` and not `iterm`. **The duplication is
+    accepted in writing rather than suppressed.** Gating the modules so one binary owns them
+    has no mechanism: cargo offers no per-binary `cfg` for a `#[path]`-shared module, so it
+    would take a feature flag or moving the test blocks, and moving code is what this scope
+    excludes. **This is named here because a plan that meets 48 at `cargo test` will reach
+    for the wrong fix**, which is deleting tests.
+  - **`README.md`'s "How this repo is organised"** — nothing there promises a library today,
+    which is worth confirming rather than assuming, and the licence paragraph's *"taking a
+    library dependency on this crate takes the GPL-2.0 obligation with it"* becomes a
+    sentence about something no longer possible.
+  - **Not in scope, each a decision rather than an omission:** no move of `src/iterm/` or
+    `src/status.rs` on disk — a reorganisation would bury this diff in renames and is the
+    thing that makes a restructure unreviewable. No change to what any binary does. No
+    `cargo publish`, for Phase 7's reason. **No version bump argued here**: the crate is
+    unpublished, so `0.2.0` has never meant anything to anyone and this changes no string a
+    consumer has parsed — which is the opposite of OQ-14's situation and is why that
+    question does not reopen.
+- **Exit gate.** Every check is headless; none needs iTerm2 or the API except 5, which is the
+  one that proves nothing regressed. **Checks 1 and 2 are the phase**, and both are about the
+  packaged artifact rather than the working tree.
+  1. **The package has no lib target.** `cargo metadata` reports **zero** targets of kind
+     `lib` and exactly three of kind `bin` (`oko`, `oko-hook`, `oko-probe`). Then the
+     packaged manifest: a **verifying** `cargo package` — not `--no-verify` — and read
+     `target/package/oko-iterm2-<v>/Cargo.toml`: **no `[lib]` section**, and `src/lib.rs`
+     absent from the file list. **The verifying form is the check rather than a preference**:
+     with `--no-verify` that directory is left over from the previous run, and round 1
+     measured it still showing `[lib] name = "oko"` while the freshly built `.crate` had
+     none. Phase 7's check 8 asserted one lib named `oko`; this is that inverted.
+  2. **Nothing can depend on it.** In a scratch directory outside this repo, a crate whose
+     `Cargo.toml` says `oko-iterm2 = { path = "…/target/package/oko-iterm2-<v>" }` and whose
+     `src/main.rs` says **`use oko::status::Status;`** must fail to build, with
+     `error[E0433]` naming the missing crate rather than a missing item. **The spelling is
+     `oko`, not `oko_iterm2`, and getting that backwards makes the check unfalsifiable**:
+     Phase 7 split package name from lib name, so a dependent is handed `--extern oko=…` and
+     `oko_iterm2` never resolves — before the change either. Round 1 measured both legs
+     against the pre-change tarball: `use oko_iterm2::…` already failed, `use oko::…` built
+     clean. **Run it before the change as well and record that it succeeded** — a check that
+     only ever fails proves nothing, and Phase 7's check 2 is the precedent.
+  3. **`cargo test` accounts for all 48, per binary and not just in total.** `oko` reports
+     **40** (23 of its own plus 17), `oko-hook` **17** (3 own plus 14), `oko-probe` **17**
+     (0 own plus 17). **The per-binary split is the check, because a total hides the error it
+     exists to catch**: an `oko-hook` wrongly given `iterm` reports 20, and the shared total
+     becomes 51 — measured, and the reason this check is not written as one number. (**48 and
+     51 count shared-test executions, not the 74 the three binaries report in total**, which
+     is what the reader has to hold.) **The opposite error needs no gate**: an `oko-probe`
+     without `status` does not compile at all — `E0432` at `src/iterm/watch.rs`'s import and
+     `E0433` at its `crate::status::oko_dir` call — so it never reaches a test count. A total
+     that is neither 48 nor a split matching the table above is a module declared in the
+     wrong place or a test that stopped running.
+  4. **`cargo build --release`, `cargo clippy --all-targets -- -D warnings` and `cargo
+     package` are clean**, and `spec-lint --strict` passes. **Clippy passes only because of
+     the scope's `#![allow(dead_code)]`, and check 4 no longer carries the signal it was
+     drafted to carry** — an earlier version of this check claimed dead-code warnings would
+     catch a module included but unreferenced, which is exactly what the allow suppresses.
+     **What replaces it is check 3's per-binary split**, and saying so here is what stops a
+     later reader trusting a guarantee this check does not provide. If clippy is *not* clean,
+     the allow is in the wrong place or too narrow — that is the failure this check does
+     still detect.
+  5. **Nothing regressed, and the stream proves it cheapest.** `oko --follow` against a real
+     window is byte-identical to Phase 7's, header included — same version, same `schema`, no
+     row field moved. **Where the baseline comes from is part of the check**: a `git worktree`
+     at **`bdf777b`** — the 0.2.0 bump, and the last commit on `feat/publish-crate` that
+     changes code — built and run against the same window, for the reason Phase 7's own
+     check 1 spelled out: a second person has no artifact from this machine. **An explicit
+     SHA rather than "the merge commit"**, which names nothing: this repo has zero merge
+     commits, and anything earlier than `bdf777b` fails the check on the version string for
+     the wrong reason. Then `oko --help`, `--licenses`, `--version` and a typo behave as
+     Phase 7's gate left them: **`wc -c` over a redirect** gives **1054 / 895 / 10** bytes
+     on stdout, and the typo exits 2 with 0 bytes on stdout and 1054 on stderr. **The method
+     is named because it is what the numbers depend on** — a `$(…)` capture strips the
+     trailing newline and reports each one short, which is how an earlier draft of this check
+     came to say 1053 / 894 / 9 and to attribute them to Phase 7's check 2, which records no
+     byte counts at all. Also: `oko-probe` still enumerates. **The dashboard is not re-gated by keystroke**: no code in
+     `src/ui.rs` changes except its `use` lines, and this check exercises the same `Watcher`.
+  6. **`cargo +1.88.0 check --bins` still succeeds.** The floor was derived from the locked
+     graph and nothing here touches dependencies, so this is a regression check rather than a
+     derivation — but three binaries now compile code one used to, and `#[path]` is not what
+     an MSRV is usually tested against.
+- **Close-out.** **Reconciliation.** `rules/iterm-api.md` and `rules/claude-status.md` both
+  declare `sources` under `src/iterm/` and `src/status.rs`, which do not move — **but their
+  citations are `file:symbol` and stay resolvable by construction**, so the expected answer is
+  "no change" and check 4's linter is the backstop that makes that expectation falsifiable.
+  `rules/session-commands.md` and `rules/follow-stream.md` both name `src/main.rs` symbols;
+  same reasoning. **`rules/dashboard-ui.md` is the one to read rather than assume** — it
+  describes three threads and the branches ahead of them, which is where a binary's root
+  module declarations now sit. `README.md`'s licence paragraph loses the sentence about a
+  library dependency, which is the only user-facing change in the phase. `proto/NOTICE.md`
+  says the same thing and changes with it. **§2.13 needs a dated note and is easy to miss**:
+  it says `src/lib.rs` "already exposes `iterm` and `status`, so panex-tui *could* depend on
+  the `oko` crate", which stops being true. **The decision it records is untouched** — that
+  paragraph rejected the library route and this phase agrees with it — so what goes stale is
+  a premise, not a conclusion, and a `CORRECTED` note in place is the §6.1 step 1 form for
+  exactly that. **The `CLAUDE.md` observable line is re-read and the expected answer is
+  "no change"**. **OQ-13 needs no work at close-out** — it and §2.16 were both written when
+  this phase was appended, which is why the resolution is dated 2026-09-02 rather than
+  carrying the phase's shipped date; the close-out step is to confirm they still describe
+  what shipped. Raises no new question. Commit plan: **one push to `feat/no-lib-surface`** — the spec and
+  review-record commit first, then the restructure, then the documentation; the PR leaves
+  draft when the round converges. `cargo publish` is not in this plan either, and is now
+  unblocked by it.

@@ -9,6 +9,13 @@
 //!
 //! The API must be enabled once per machine — see `README.md` and `rules/iterm-api.md`.
 
+// The shared modules, declared here rather than reached through a library. There is no
+// lib target: publishing one would put an internal seam on crates.io as a public API and
+// hand the vendored schema's GPL-2.0 obligation to anyone writing one dependency line
+// (§2.16, OQ-13). `src/ui.rs` and `src/follow.rs` use both of them.
+mod iterm;
+mod status;
+
 mod follow;
 mod ui;
 
@@ -18,7 +25,7 @@ use std::thread;
 use anyhow::{Context, Result};
 use ratatui::crossterm::event;
 
-use oko::iterm::{Cmd, Watcher};
+use iterm::{Cmd, Watcher};
 use ui::AppEvent;
 
 /// The name iTerm2 shows in its API console and keeps in its permissions list.

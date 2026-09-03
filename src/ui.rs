@@ -38,8 +38,8 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row as TableRow, Table, TableState};
 
-use oko::iterm::{Cmd, Event as ItermEvent, Row, Snapshot};
-use oko::status::{Shown, Status};
+use crate::iterm::{Cmd, Event as ItermEvent, Row, Snapshot};
+use crate::status::{Shown, Status};
 
 /// The status column's width, and it is **counted rather than trusted**.
 ///
@@ -453,7 +453,7 @@ fn rule(frame: &mut ratatui::Frame, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oko::status::Age;
+    use crate::status::Age;
 
     #[test]
     fn the_status_column_holds_the_widest_cell_the_ladder_can_produce() {

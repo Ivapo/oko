@@ -17,13 +17,12 @@ keywords = ["iterm2", "tui", "dashboard", "claude-code", "ratatui"]
 categories = ["command-line-utilities"]
 
 # The package is `oko-iterm2` because `oko` on crates.io is an unrelated project. What a
-# human types is unaffected — but only because both target names below are explicit. Left
-# to cargo, the library would be derived from the package and become `oko_iterm2`, and every
-# `use oko::…` in this crate would stop compiling.
-[lib]
-name = "oko"
-path = "src/lib.rs"
-
+# human types is unaffected, because every target name below is explicit.
+#
+# **There is no `[lib]`, deliberately.** Publishing one would make an internal seam a public
+# API on crates.io — a semver promise nothing in this project ever made — and hand the
+# vendored schema's GPL-2.0 obligation to anyone who wrote one dependency line. The binaries
+# are the product (§2.16, OQ-13). The shared modules are declared by each binary instead.
 [[bin]]
 name = "oko"
 path = "src/main.rs"
