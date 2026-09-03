@@ -45,7 +45,7 @@ phases:
     by: null
   - name: "Phase 8 — the binaries are the product: no library surface in the published crate"
     reviewed: 2026-09-02
-    shipped: null
+    shipped: 2026-09-02
     cut: null
     by: null
 
@@ -562,6 +562,16 @@ behaviour when one is watching. §1.1's non-goals hold: the stream observes and 
 nothing in it lets a consumer act on a session except by reading. §2.6 rejected a side panel
 because a split pane lives in one tab and would need one copy per tab; a separate program
 reading a stream is not that, so that argument does not reach this.
+
+**CORRECTED 2026-09-02 (Phase 8).** One sentence above describes a thing that no longer
+exists: `src/lib.rs` does *not* expose `iterm` and `status`, because there is no library
+target at all — panex-tui **could not** depend on the `oko` crate today, and neither could
+anyone else (§2.16, OQ-13). **The decision this paragraph records is untouched, and that is
+the point of correcting it here rather than striking it**: the argument was that a
+compile-time dependency has no absence to degrade to, and Phase 8 agrees with it hard enough
+to remove the dependency's *possibility*. What went stale is the premise the argument was
+made against, not the argument. Left in place because a reader meeting "could depend on the
+`oko` crate" needs to know it is no longer true where they read it.
 
 **CORRECTED 2026-08-17 (Phase 6).** Two sentences above are now misleading, and in opposite
 directions — one understates the contract, the other overstates the conclusion.

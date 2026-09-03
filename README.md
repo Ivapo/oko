@@ -230,7 +230,12 @@ GPL-2.0. It is included as the interface definition for iTerm2's scripting API �
 format a client has to speak — and pinned by commit and hash so a schema change shows up as
 a diff. It ships inside the published crate, which is why the licence field names it.
 
-**Taking a *library* dependency on this crate takes the GPL-2.0 obligation with it.**
-Installing and running the binaries distributes nothing and does not. `oko --licenses`
-prints all of this from an installed copy; [`proto/NOTICE.md`](proto/NOTICE.md) has the full
-provenance.
+**The crate publishes no library**, and that is deliberate rather than an omission: a
+dependency on it would link the vendored schema into your artifact and carry the GPL-2.0
+obligation to you, and it would turn an internal seam into a public API nothing here ever
+promised to keep stable. Installing and running the binaries distributes nothing and carries
+no such obligation. `oko --licenses` prints all of this from an installed copy;
+[`proto/NOTICE.md`](proto/NOTICE.md) has the full provenance.
+
+If you want Oko's rows in your own program, `oko --follow` is the interface — a JSON stream
+you read from a process you spawn, which degrades to nothing when Oko is not installed.
