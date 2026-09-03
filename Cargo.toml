@@ -1,17 +1,49 @@
 [package]
-name = "oko"
+name = "oko-iterm2"
 version = "0.1.0"
 edition = "2024"
+# The maximum `rust-version` over the locked graph, not edition 2024's 1.85.0 — that is the
+# quantity `cargo install` honours, and understating it promises a toolchain this does not
+# build on. `ratatui`, `time` and `darling` each declare 1.88.0; `instability` declares
+# "1.88" and ties it. Re-derive it by comparing versions as numbers, never as strings.
+rust-version = "1.88.0"
 description = "\"The eye\" — a live dashboard tab inside iTerm2 showing what every other tab in the window is doing, with Enter to jump to one."
 repository = "https://github.com/Ivapo/oko"
-license = "MIT"
+homepage = "https://github.com/Ivapo/oko"
+documentation = "https://github.com/Ivapo/oko"
+license = "MIT AND GPL-2.0"
 readme = "README.md"
 keywords = ["iterm2", "tui", "dashboard", "claude-code", "ratatui"]
 categories = ["command-line-utilities"]
-# `license` covers Oko's own source. `proto/api.proto` is vendored from iTerm2 and is
-# GPL-2.0 — see proto/NOTICE.md. It cannot be dropped: build.rs compiles it, and it is the
-# wire format a client must speak. Read that notice before publishing this anywhere.
 
+# The package is `oko-iterm2` because `oko` on crates.io is an unrelated project. What a
+# human types is unaffected — but only because both target names below are explicit. Left
+# to cargo, the library would be derived from the package and become `oko_iterm2`, and every
+# `use oko::…` in this crate would stop compiling.
+[lib]
+name = "oko"
+path = "src/lib.rs"
+
+[[bin]]
+name = "oko"
+path = "src/main.rs"
+
+[[bin]]
+name = "oko-hook"
+path = "src/bin/oko-hook.rs"
+
+# `probe` was free on the machine that built it. In a stranger's ~/.cargo/bin it is a
+# collision, and one that is unattributable to Oko when it happens.
+[[bin]]
+name = "oko-probe"
+path = "src/bin/oko-probe.rs"
+
+# The notice was read, and `license` above is what it decided: `cargo package` puts
+# `proto/api.proto` in the tarball, that file is GPL-2.0 and vendored verbatim, and
+# `MIT AND GPL-2.0` is the SPDX expression for what ships rather than a choice between the
+# two. It cannot be dropped: build.rs compiles it, and it is the wire format a client must
+# speak. Anyone taking a *library* dependency on this crate inherits the GPL-2.0 obligation
+# with it — see proto/NOTICE.md, and OQ-13 in specs/tab_dashboard_spec.md.
 [dependencies]
 anyhow = "1"
 libc = "0.2"

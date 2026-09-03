@@ -3,9 +3,9 @@
 //! client, because when a gate check fails inside a full-screen TUI this is what can be
 //! read.
 //!
-//!     probe                      identity, then the sessions of this window
-//!     probe activate <session>   focus that session, its tab, and its window
-//!     probe watch                print notifications as they arrive
+//!     oko-probe                      identity, then the sessions of this window
+//!     oko-probe activate <session>   focus that session, its tab, and its window
+//!     oko-probe watch                print notifications as they arrive
 //!
 //! `watch` deliberately subscribes to **more** than the dashboard does — terminate-session
 //! as well as layout-change and new-session — because its job is to show which notification
@@ -31,7 +31,7 @@ const WANTED_VARS: [&str; 5] = ["id", "tty", "termid", "path", "jobName"];
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("probe: {e:#}");
+        eprintln!("oko-probe: {e:#}");
         std::process::exit(1);
     }
 }
@@ -42,7 +42,7 @@ fn run() -> Result<()> {
         None => enumerate(),
         Some("activate") => {
             let session =
-                args.get(1).ok_or_else(|| anyhow!("usage: probe activate <session-id>"))?;
+                args.get(1).ok_or_else(|| anyhow!("usage: oko-probe activate <session-id>"))?;
             let mut client = connect()?;
             client.activate(session)?;
             println!("activated {session}");

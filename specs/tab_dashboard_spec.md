@@ -948,7 +948,7 @@ it is the second thing a stranger needs to learn before the first `cargo install
   rather than as their last value. These are not exclusive.~~
 - **OQ-5 — Can Oko set, read and *watch* `user.okoName` on a session that is not its own?**
   **RESOLVED 2026-08-15, during Phase 4's review round: yes, all three.** Measured by
-  `src/bin/probe.rs:var_spike` against iTerm2 3.6.11, writing to a session the probe does not
+  `src/bin/oko-probe.rs:var_spike` against iTerm2 3.6.11, writing to a session the probe does not
   occupy: the set returns `OK`, the read-back returns the written string, and — the part that
   was not required to pass — `NOTIFY_ON_VARIABLE_CHANGE` on `user.okoSpike` **does** deliver,
   carrying the new value and the session identifier. So §2.10's storage decision stands, and
@@ -1271,7 +1271,7 @@ in §3, not a user-facing artifact.*
   - `cargo init` the crate: `Cargo.toml`, `src/main.rs`, ratatui not yet a dependency.
   - Document, in `rules/iterm-api.md`, the human steps to enable the API and what the
     authorization prompt asks — a second person must be able to reproduce the setup.
-  - A minimal non-TUI binary (`src/bin/probe.rs`) that connects to the API by whichever
+  - A minimal non-TUI binary (`src/bin/oko-probe.rs`) that connects to the API by whichever
     transport OQ-1 selects, and does exactly three things, **in this order**:
     1. **Establishes the join key.** Prints its own `TERM_SESSION_ID`, and beside it the
        identifier the API gives for the same pane, so the two can be compared by eye
@@ -1398,7 +1398,7 @@ can use.*
      session it named before, and Enter jumps there rather than to a neighbour.
 - **Close-out:** seeds `rules/dashboard-ui.md` (the table, the key bindings, the refresh
   path) and updates `rules/iterm-api.md` for anything the client learned — including
-  **re-pointing its `sources` at `src/iterm/`**, and saying whether `src/bin/probe.rs`
+  **re-pointing its `sources` at `src/iterm/`**, and saying whether `src/bin/oko-probe.rs`
   survives the phase. Left alone, that rule regenerates from a throwaway spike and the
   linter cannot see it, because `probe.rs` still exists. It sits close to its cap — which
   has been raised twice already as measurements landed — so the update raises it again or
@@ -1519,7 +1519,7 @@ once, which is exactly when they often do not.*
 - **Scope:**
   - ~~Settle OQ-5 and OQ-6 during this phase's review round, not during implementation.~~
     Both settled 2026-08-15, in that round. OQ-5 was measured by
-    `src/bin/probe.rs:var_spike`, which the round added and which stays as a diagnostic;
+    `src/bin/oko-probe.rs:var_spike`, which the round added and which stays as a diagnostic;
     `src/iterm/client.rs:set_variable` is the write path it proved and the one this phase
     builds on.
   - **The name** (`src/status.rs` or a new `src/name.rs`, `src/iterm/watch.rs`, `src/ui.rs`).
@@ -2201,7 +2201,7 @@ and check 1 deliberately installs from a packaged tarball rather than from this 
   regeneration target and belongs there rather than in `session-commands.md`. Three lines of
   headroom, so no raise-or-cut. `rules/iterm-api.md` (113/115) changes one citation path and
   nothing else — and it is not the only file that does: §3's OQ-5 and Phase 4's scope carry the same
-  `src/bin/probe.rs:var_spike` citation, and all three move together. **Those two are
+  `src/bin/oko-probe.rs:var_spike` citation, and all three move together. **Those two are
   corrections of where a file lives, not edits to what a shipped phase decided**, which is
   the distinction that keeps an append-only document honest while its citations stay
   resolvable (§5). Check 8 is the backstop. `rules/follow-stream.md` (85/85) **does need one, and check 6 is not what finds it**: the
