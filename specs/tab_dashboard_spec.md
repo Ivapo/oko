@@ -1239,7 +1239,33 @@ it is the second thing a stranger needs to learn before the first `cargo install
   land on. **What settles it is whether anyone wants it**: §2.13 turned down a library for
   consumers on the argument that a stream degrades to nothing and a linked dependency does
   not, and no consumer has asked since.
-- **OQ-14 — Which version is the first published one?** *(design call — blocks nothing;
+- **OQ-14 — Which version is the first published one?** **RESOLVED 2026-09-02, at Phase 7's
+  close-out: `0.2.0`, and the gate is what settled it rather than the argument below.**
+
+  **Check 6 measured the thing this question is about, and the answer was worse than
+  predicted.** The old build and the new one, run against the same window, produced captures
+  that were **byte-identical — header included**. Not "two artifacts answering to one number"
+  as an inference from reading `src/follow.rs:header_line`, but two artifacts that a consumer
+  holding both streams cannot separate by any byte either of them writes. `--version` prints
+  the same nine bytes from both. That is the collision this question raised, observed rather
+  than reasoned about, and it is what tipped a question that had been genuinely balanced.
+
+  **The argument against was real and is what the resolution pays.** `0.2.0` does imply a
+  feature release, and Phase 7 adds three flags and a rename that no existing user asked
+  for. It is accepted because the asymmetry this question already named is decisive: a
+  version can be bumped and cannot be un-published, so the cost of being wrong here is one
+  misleading minor number, against a permanent inability to tell a crates.io artifact from a
+  local build. **Every `0.2.x` came from crates.io** is a fact worth one overstated bump.
+
+  What it costs, stated exactly: one changed string in a header line
+  (`{"oko":"0.2.0","schema":1}`) that `rules/follow-stream.md` documents a consumer as
+  ignoring except for `schema`. **No schema bump** — `schema` stays `1`, no row field moves,
+  and panex-tui, which has been reading that line since 2026-08-16, is unaffected by
+  construction. Check 6 was re-run after the bump and the only difference between the two
+  captures is that field, which is what the check permits and now, for the first time, has
+  something to permit.
+
+  *(design call — blocks nothing;
   decides one string a consumer may already have parsed)* `0.1.0` is not just the manifest,
   it is the first line of every `--follow` stream (`src/follow.rs:header`, which reads
   `CARGO_PKG_VERSION`), and `rules/follow-stream.md` documents that line as naming the build.
@@ -2213,10 +2239,15 @@ and check 1 deliberately installs from a packaged tarball rather than from this 
   is the largest documentation change since Phase 5 and the one a stranger actually reads.
   `proto/NOTICE.md` gains one line recording that Oko is published and under what expression;
   its provenance table is untouched. **The `CLAUDE.md` observable line is re-read and the
-  expected answer is "no change"** — nothing here alters what a human sees. Raises **OQ-13**
-  and **OQ-14** and resolves neither; check 6 produces OQ-14's evidence and check 1 produces
+  expected answer is "no change"** — nothing here alters what a human sees. ~~Raises **OQ-13**
+  and **OQ-14** and resolves neither;~~ check 6 produces OQ-14's evidence and check 1 produces
   the fact OQ-13 turns on, which is that the binaries are the whole product a stranger
-  installs. Commit plan: **one push to `feat/publish-crate`** — the spec and review-record
+  installs. **CORRECTED 2026-09-02 (this phase's own close-out): OQ-14 is resolved here, not
+  merely raised.** The sentence above was written expecting check 6's evidence to inform a
+  later decision; the evidence turned out to be decisive on arrival — byte-identical
+  captures, header included — so the phase bumped to `0.2.0` and closed the question. **OQ-13
+  is raised and not settled**, as written: nothing in this gate bears on whether the lib is
+  published with a public surface. Commit plan: **one push to `feat/publish-crate`** — the spec and review-record
   commit first, then the manifest and rename, then the flags, then the documentation, and the
   PR leaves draft when the round converges. **`cargo publish` is not in this plan**: the
   branch ends at a verified tarball and a human presses the button, because the one thing

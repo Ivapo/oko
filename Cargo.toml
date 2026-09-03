@@ -1,6 +1,6 @@
 [package]
 name = "oko-iterm2"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 # The maximum `rust-version` over the locked graph, not edition 2024's 1.85.0 — that is the
 # quantity `cargo install` honours, and understating it promises a toolchain this does not
