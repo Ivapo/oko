@@ -26,6 +26,22 @@ use oko::iterm::{Client, flatten, own_tty, resolve_own_session};
 /// Its own name, so the dashboard's authorization is never disturbed by a diagnostic run.
 const ADVISORY_NAME: &str = "oko-probe";
 
+/// The `//!` block's three lines. `var` is deliberately absent: it is OQ-5's spike, kept as
+/// a diagnostic, and not one of the things a person reaching for this binary wants.
+const USAGE: &str = "\
+oko-probe — Oko's headless diagnostic: what iTerm2 thinks, without a full-screen TUI in the
+way. When a dashboard row looks wrong, this is what says whether iTerm2 ever reported it.
+
+usage:
+  oko-probe                      identity, then the sessions of this window
+  oko-probe activate <session>   focus that session, its tab, and its window
+  oko-probe watch                print notifications as they arrive
+  oko-probe --help, -h           print this
+
+`watch` subscribes to more than the dashboard does, so it can tell you whether iTerm2 sent
+an event at all — which is the difference between Oko missing something and iTerm2 not
+saying it.";
+
 /// Three identity candidates (§2.1) and the two values a plain row is made of (§2.2).
 const WANTED_VARS: [&str; 5] = ["id", "tty", "termid", "path", "jobName"];
 
@@ -50,6 +66,13 @@ fn run() -> Result<()> {
         }
         Some("watch") => watch(),
         Some("var") => var_spike(),
+        // It never fell through to enumerating a window — `Some(other)` below already
+        // `bail!`s — but it answered with no usage text and exit 1, under a prefix this
+        // phase is otherwise removing.
+        Some("--help" | "-h") => {
+            println!("{USAGE}");
+            Ok(())
+        }
         Some(other) => {
             bail!(
                 "unknown command {other:?}; expected `activate <session-id>`, `watch` or `var`"

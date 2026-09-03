@@ -24,6 +24,24 @@ use time::OffsetDateTime;
 
 use oko::status::{Entry, Status, remove_if_owned, write};
 
+/// The two things it does. Claude Code runs this binary; a human runs it once, to get the
+/// block to paste — so those are the only two lines that belong here.
+const USAGE: &str = "\
+oko-hook — the hook Claude Code runs, so Oko's status column has something to show.
+
+usage:
+  oko-hook                    read one hook event on stdin and write one status file
+  oko-hook --print-settings   print the registration block for ~/.claude/settings.json
+  oko-hook --help, -h         print this
+
+Claude Code invokes the first form itself; you never run it by hand. Merge the second
+form's output into ~/.claude/settings.json as a top-level `hooks` key, then restart any
+Claude session you want in the table.
+
+It is silent on both streams and exits 0 on every path, including its own failures — for
+some events Claude Code feeds a hook's stdout into Claude's context, and shows its stderr
+to the user. Set OKO_HOOK_DEBUG=1 to send errors to ~/.oko/hook.log instead.";
+
 fn main() {
     // Nothing this program can fail at is worth showing a human mid-session (§2.3).
     if let Err(e) = run() {
@@ -32,6 +50,15 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    // Ahead of the stdin read, which is the whole point: matched on nothing but
+    // `--print-settings`, this binary answered `--help` by *blocking* in `read_to_string`.
+    // A hang is a worse first contact than a wrong answer, because nothing on screen says
+    // what happened.
+    if matches!(std::env::args().nth(1).as_deref(), Some("--help" | "-h")) {
+        println!("{USAGE}");
+        return Ok(());
+    }
+
     if std::env::args().nth(1).as_deref() == Some("--print-settings") {
         println!("{}", settings_block()?);
         return Ok(());
