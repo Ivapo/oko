@@ -40,7 +40,7 @@ phases:
     by: null
   - name: "Phase 7 — publishing it: a crate a stranger can install, and what it says it is"
     reviewed: 2026-09-02
-    shipped: null
+    shipped: 2026-09-02
     cut: null
     by: null
 
