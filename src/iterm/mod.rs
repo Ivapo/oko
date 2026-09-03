@@ -5,6 +5,15 @@
 //! sessions are in it, in which tab, and what changed.
 //!
 //! Setup — enabling the API, how authorization works — is in `rules/iterm-api.md`.
+//! **`#![allow(dead_code)]` is the cost of having no lib target.** These modules are
+//! compiled into each binary that declares them (§2.16), and a binary crate seeds dead-code
+//! analysis from `main` — so every item a given binary does not reach would warn. Three
+//! binaries lose dead-code cover over this file, and nothing buys it back.
+//!
+//! `unused_imports` joins it here and only here: the `pub use` re-exports below stop being
+//! public API the moment this module lives inside a bin crate.
+
+#![allow(dead_code, unused_imports)]
 
 // Generated from the vendored schema; its shape is iTerm2's business, not ours.
 #[allow(clippy::all, clippy::pedantic)]

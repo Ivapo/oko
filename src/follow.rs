@@ -24,8 +24,8 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use oko::iterm::{Cmd, Event, Row, Snapshot, Watcher};
-use oko::status::Age;
+use crate::iterm::{Cmd, Event, Row, Snapshot, Watcher};
+use crate::status::Age;
 
 /// The schema a consumer must recognise, carried once per stream (OQ-9).
 ///
@@ -207,7 +207,7 @@ fn row_json(row: &Row) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oko::status::{Shown, Status};
+    use crate::status::{Shown, Status};
 
     /// Serialization is a pure function from a `Snapshot` to a line, which is the whole reason
     /// these tests exist without an iTerm2 anywhere near them (OQ-8): the interface risk lives

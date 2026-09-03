@@ -22,7 +22,12 @@ use std::io::{Read, Write};
 use anyhow::{Context, Result, bail};
 use time::OffsetDateTime;
 
-use oko::status::{Entry, Status, remove_if_owned, write};
+// `status` and nothing else: this binary has no `iterm` reference at all, and giving it
+// one would compile perfectly and show up only as three extra tests (§4, Phase 8 check 3).
+#[path = "../status.rs"]
+mod status;
+
+use status::{Entry, Status, remove_if_owned, write};
 
 /// The two things it does. Claude Code runs this binary; a human runs it once, to get the
 /// block to paste — so those are the only two lines that belong here.
@@ -237,7 +242,7 @@ fn log_debug(message: &str) {
     if std::env::var_os("OKO_HOOK_DEBUG").is_none() {
         return;
     }
-    let Ok(dir) = oko::status::oko_dir() else {
+    let Ok(dir) = status::oko_dir() else {
         return;
     };
     if std::fs::create_dir_all(&dir).is_err() {

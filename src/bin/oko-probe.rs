@@ -20,8 +20,15 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow, bail};
 
-use oko::iterm::api::NotificationType;
-use oko::iterm::{Client, flatten, own_tty, resolve_own_session};
+// `status` is here although nothing below names it: `src/iterm/watch.rs` reaches
+// `crate::status`, so the module `iterm` needs it even where this binary does not.
+#[path = "../iterm/mod.rs"]
+mod iterm;
+#[path = "../status.rs"]
+mod status;
+
+use iterm::api::NotificationType;
+use iterm::{Client, flatten, own_tty, resolve_own_session};
 
 /// Its own name, so the dashboard's authorization is never disturbed by a diagnostic run.
 const ADVISORY_NAME: &str = "oko-probe";

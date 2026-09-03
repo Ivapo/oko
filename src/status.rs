@@ -13,6 +13,12 @@
 //!
 //! Ageing is two clocks and one ladder. [`Entry::tool`] chooses which clock a `working`
 //! expires on, and [`Age`] is what every status wears to say how long it has been true.
+//! **`#![allow(dead_code)]` is the cost of having no lib target.** These modules are
+//! compiled into each binary that declares them (§2.16), and a binary crate seeds dead-code
+//! analysis from `main` — so every item a given binary does not reach would warn. Three
+//! binaries lose dead-code cover over this file, and nothing buys it back.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::fs;
