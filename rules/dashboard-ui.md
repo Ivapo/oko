@@ -9,7 +9,7 @@ covers: >
   the dashboard Oko draws — its columns and where each value comes from, the keys it
   answers to, the one modal state it has, how a selection survives a changing row set, and
   the path by which rows track the window without polling
-max_lines: 112
+max_lines: 118
 generated: 2026-08-16
 ---
 
@@ -87,10 +87,12 @@ Three threads meeting on one channel of `AppEvent` (`src/main.rs:run`): the watc
 the socket and every conversation with iTerm2, one blocks in `event::read`, and the main
 thread only draws. Quitting drops the receivers, which is what stops the other two.
 Connecting happens **before** `ratatui::init()`, so an API-off failure is a readable
-message rather than something that flashes between init and restore. **Three branches sit
-ahead of all of it** and none of this runs for any of them: `--version` answers and returns
-before even the connection, `--follow` returns into `src/follow.rs` (`follow-stream.md`), and
-`--activate`/`--set-name` connect, run one `Cmd` and exit (`session-commands.md`).
+message rather than something that flashes between init and restore. **Five branches and a
+refusal sit ahead of all of it** and none of this runs for any of them: `--version`,
+`--help` and `--licenses` answer and return before even the connection, `--follow` returns
+into `src/follow.rs` (`follow-stream.md`), and `--activate`/`--set-name` connect, run one
+`Cmd` and exit (`session-commands.md`). A leading flag none of them recognised is a usage
+line on stderr and exit 2 — it too never reaches here.
 
 Nothing polls iTerm2. A variable-change notification patches one field of one row; a layout
 change rebuilds the shape from the `ListSessionsResponse` it carries and fetches variables

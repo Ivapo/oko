@@ -53,9 +53,18 @@ the row ages against `OKO_TOOL_STALE_AFTER` (default 45 minutes) instead, so a q
 fifteen-minute build reports `◐ working >10m` rather than going stale mid-work. It is a
 longer clock and not an exemption: an agent killed mid-tool still gives up eventually.
 
-**Requirements:** macOS, [iTerm2](https://iterm2.com) 3.6 or later, and a Rust toolchain to
-build. The status column additionally needs [Claude
-Code](https://claude.com/claude-code) — everything else works without it.
+**macOS only.** Oko talks to iTerm2 and to macOS, and the crate builds on Linux without
+being able to work there. It needs [iTerm2](https://iterm2.com) 3.6 or later and Rust 1.88
+or later; the `status` column additionally needs [Claude
+Code](https://claude.com/claude-code), and everything else works without it.
+
+```sh
+cargo install oko-iterm2        # the package is oko-iterm2; what you type is oko
+```
+
+The crate is `oko-iterm2` because `oko` on crates.io is an unrelated project. It installs
+three binaries — `oko`, `oko-hook` and `oko-probe` — and there is one more setup step
+below, done once per machine.
 
 ## Setup — once per machine
 
@@ -77,7 +86,7 @@ The `status` column comes from Claude Code itself, through hooks. Nothing is ins
 tab and no shell profile is touched; you register one command once:
 
 ```sh
-cargo install --path .          # puts oko, oko-hook and probe on your PATH
+cargo install oko-iterm2        # if you have not already
 oko-hook --print-settings       # prints the exact JSON block, with its absolute path
 ```
 
@@ -88,7 +97,8 @@ session you want in the table.
 
 Install with `cargo install` rather than pointing the hooks at `target/release/oko-hook`: a
 `cargo clean` would otherwise leave every Claude session on the machine running a hook that
-no longer exists.
+no longer exists. Working on Oko itself, `cargo install --path .` is the same thing from a
+clone.
 
 Every registration in that block is load-bearing, and two of the matchers are there to stop
 the dashboard *lying* — `Notification` fires an `idle_prompt` a minute after every turn,
@@ -103,7 +113,6 @@ send its errors to `~/.oko/hook.log`.
 ## Running it
 
 ```sh
-cargo install --path .          # if you have not already, for the status column
 oko
 ```
 
@@ -126,7 +135,7 @@ Enter changes which tab is focused and nothing else: nothing is typed into the t
 oko --follow          # newline-delimited JSON on stdout, no terminal involved
 ```
 
-The first line names the build and the schema — `{"oko":"0.1.0","schema":1}` — and every line
+The first line names the build and the schema — `{"oko":"0.2.0","schema":1}` — and every line
 after it is one snapshot: `window_number`, and a `rows` array carrying `session_id`, `tab`,
 `name`, `path`, `status` and `age`, plus `claude: true` for a Claude row or `job` for a plain
 one. Ages are the same buckets the table shows, never a second count, and a line identical to
@@ -139,8 +148,17 @@ that wants Oko *optionally* can spawn it, read it, and drop it. Errors go to std
 carries the protocol and nothing else. The full contract is in
 [`rules/follow-stream.md`](rules/follow-stream.md).
 
-`oko --version` prints a version and exits without touching iTerm2, so a consumer can tell a
-build that speaks this from one that does not — being on `PATH` does not settle it.
+`oko --version` (or `-V`) prints a version and exits without touching iTerm2, so a consumer
+can tell a build that speaks this from one that does not — being on `PATH` does not settle
+it. `oko --help` (or `-h`) and `oko --licenses` answer from the same place, ahead of any
+connection, so none of the three needs a working setup and none of them draws a dashboard.
+A flag Oko does not know is a usage line on stderr and exit 2, never a full-screen takeover
+of your terminal.
+
+```sh
+oko --help                      # every flag, in one screen
+oko --licenses                  # this crate's licence, and the one file that is not ours
+```
 
 ## Acting on a row from another program
 
@@ -176,12 +194,12 @@ what `◌ stale` is for.
 ## Diagnostics
 
 ```sh
-probe                           # identity, then the sessions of this window, headless
-probe watch                     # print iTerm2 notifications as they arrive
+oko-probe                       # identity, then the sessions of this window, headless
+oko-probe watch                 # print iTerm2 notifications as they arrive
 ```
 
-`probe watch` subscribes to more than the dashboard does, so when something does not update
-it tells you whether iTerm2 sent an event at all.
+`oko-probe watch` subscribes to more than the dashboard does, so when something does not
+update it tells you whether iTerm2 sent an event at all.
 
 ## How this repo is organised
 
@@ -202,10 +220,17 @@ so those paths will not resolve for you.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+The crate declares **`MIT AND GPL-2.0`**, and that is a description of what it contains
+rather than a choice between the two.
 
-One exception: **[`proto/api.proto`](proto/api.proto) is vendored verbatim from
+Oko's own source is MIT — see [`LICENSE`](LICENSE). One file is not Oko's work:
+**[`proto/api.proto`](proto/api.proto) is vendored verbatim from
 [gnachman/iTerm2](https://github.com/gnachman/iTerm2)** (commit `f4ca0004`), which is
 GPL-2.0. It is included as the interface definition for iTerm2's scripting API — the wire
 format a client has to speak — and pinned by commit and hash so a schema change shows up as
-a diff. See [`proto/NOTICE.md`](proto/NOTICE.md) before redistributing.
+a diff. It ships inside the published crate, which is why the licence field names it.
+
+**Taking a *library* dependency on this crate takes the GPL-2.0 obligation with it.**
+Installing and running the binaries distributes nothing and does not. `oko --licenses`
+prints all of this from an installed copy; [`proto/NOTICE.md`](proto/NOTICE.md) has the full
+provenance.

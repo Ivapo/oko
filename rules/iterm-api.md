@@ -92,7 +92,7 @@ anything asking "does this session still exist" must add `buried_sessions` back
 raises its window.
 
 **Writing a variable works on a session this process does not occupy**, measured 2026-08-15
-by `src/bin/probe.rs:var_spike` against 3.6.11 — set, read back, and a
+by `src/bin/oko-probe.rs:var_spike` against 3.6.11 — set, read back, and a
 `NOTIFY_ON_VARIABLE_CHANGE` on the same key delivering the new value and the session id.
 `VariableRequest.set` carries `{name, value}` and **the name must begin with `user.`**, or
 iTerm2 answers `INVALID_NAME`; that is why Oko's key is `user.okoName`

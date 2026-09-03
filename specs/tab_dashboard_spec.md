@@ -5,7 +5,7 @@ note: >
   The iTerm2 dashboard tab — live per-tab directory, process and Claude Code status for
   every tab in the window, with Enter to jump to the selected one.
 status: accepted
-last_updated: 2026-08-17
+last_updated: 2026-09-02
 
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
@@ -36,6 +36,11 @@ phases:
   - name: "Phase 6 — acting on a row from outside the dashboard"
     reviewed: 2026-08-17
     shipped: 2026-08-17
+    cut: null
+    by: null
+  - name: "Phase 7 — publishing it: a crate a stranger can install, and what it says it is"
+    reviewed: 2026-09-02
+    shipped: 2026-09-02
     cut: null
     by: null
 
@@ -638,6 +643,16 @@ pipe and panics. What the caller gets is a dead child and an escape sequence, wh
 indistinguishable from a bug in itself. So `--version` answers **ahead of every other branch**
 (`src/main.rs:run`), before `--follow` and before any connection.
 
+**CORRECTED 2026-09-02 (added with Phase 7, which changes the second half of this).** The
+fall-through described above is a fact about builds up to and including Phase 6, and stays
+one — §2.14's argument for answering early is untouched, and gate check 2 measured it. What
+changes from Phase 7 on is Oko's *own* behaviour: an unrecognised leading flag becomes a
+usage line on stderr and a non-zero exit rather than a dashboard (§2.15). So a consumer
+probing a **future** Oko meets a clean refusal instead of a panic, which is strictly the
+better failure and does not weaken the case for `--version` — a build too old to know
+`--version` still falls through, and that is exactly the build the probe exists to catch.
+The sentence is left as written because it describes what those builds do.
+
 **How expensive the fall-through is, stated as what was actually measured.** One `--activate`
 against a live window costs ~120 ms (Phase 6, check 10); `--version` on the same build returns
 in 2–3 ms. The difference — **113–122 ms** — is *everything a command does beyond printing a
@@ -661,6 +676,116 @@ Oko in the same window through `user.okoName`'s variable notification, which is 
 measurement. **Phase 5's check 9 already leaned on it** — a rename in the dashboard appearing
 in the stream — so what is new is the *direction*, a writer that draws nothing reaching a
 reader that draws, and the writer is gone by the time the reader hears about it.
+
+### 2.15 What Oko is called, and what it says it is (decision, recorded — added by Phase 7)
+
+Six phases produced a tool that runs on one machine because that machine built it. `cargo
+install --path .` is the only install path the README knows, and every consumer sentence in
+§2.13 and §2.14 — "a binary named `oko` may be on `PATH`" — quietly assumes a human who
+cloned this repository. Publishing to crates.io is what makes that assumption false, and
+three things in the repo are only correct while it holds.
+
+**The name is taken, and the package name is not the binary name.** `oko` on crates.io is an
+unrelated project — a home security system, fifteen versions, owned by `piotrpdev`, last
+published 2025-04-30. It is a live crate and not a squat, so this is settled rather than
+negotiable: **the package is `oko-iterm2`.** The binaries are unaffected, because a package
+name and a binary name are different things — an explicit `[[bin]]` per target keeps `oko`,
+`oko-hook` and `oko-probe` exactly as they are typed today.
+
+**The library target is a third name, and it is the one place this rename reaches code.**
+`Cargo.toml` carries no `[lib]` section, so cargo derives the library's name from the
+package's — the rename makes it `oko_iterm2` and every `use oko::…` in the crate stops
+compiling: thirteen references across five files (`src/main.rs`, `src/ui.rs`,
+`src/follow.rs`, `src/bin/oko-hook.rs` and the probe) — eleven of them real, two being
+doc-comment mentions — producing nine `E0433: cannot find module or crate 'oko'` errors and
+failing `cargo check --bins` on all three binaries. Measured 2026-09-02 in
+a scratch copy, because "the binaries are unaffected" is the kind of claim that is true of
+the binaries and false of the build. So the rename is **two** explicit namings, not one:
+`[lib] name = "oko"` beside the three `[[bin]]` entries. **This does not settle OQ-13 by the
+back door** — naming the target is what keeps the crate compiling under any of that
+question's three answers, and whether the lib is *published with a public surface* is what
+stays open. The alternative, rewriting thirteen imports to `oko_iterm2::`, is a larger diff
+that decides exactly as little. One consequence to state rather than discover: a downstream
+depending on both this crate and crates.io's `oko` would have two libs called `oko` and would
+rename one at the dependency line — a cost borne by nobody today, and one more reason OQ-13's
+third answer looks like the one it lands on.
+
+`oko-iterm2` is preferred over
+`okoterm` or `oko-tui` for the reason the name has to do work it never did before: a
+stranger finds this by searching for `iterm2`, not for `oko`, which is a word that means
+nothing to them. **What a human types stays `oko`**; what `cargo install` takes is the part
+that changed, and it is one line in a README.
+
+**`probe` cannot ship as `probe`.** It was named in Phase 1 as a spike on one machine, and
+that name was free because nothing else on that machine wanted it. `cargo install` puts it
+in a stranger's `~/.cargo/bin`, where a binary called `probe` is a collision waiting to
+happen and is unattributable to Oko when it happens. It becomes **`oko-probe`**, which is
+the same rule `oko-hook` already follows. This is the one place Phase 7 changes something a
+human types, and it is renamed rather than dropped: §4's Phase 6 gate is built out of it,
+and a diagnostic you cannot run is how a gate check becomes unfalsifiable.
+
+**The licence field describes the source and the tarball is not the source.** `cargo package
+--list` puts `proto/api.proto` inside the published artifact, and that file is GPL-2.0 and
+vendored verbatim (`proto/NOTICE.md`). `license = "MIT"` was true of everything Oko wrote and
+was never a claim about what shipping would distribute, because until now nothing shipped.
+**The declaration becomes `MIT AND GPL-2.0`**, which is the SPDX expression for what the
+tarball actually contains rather than a choice between the two: Oko's source under MIT, the
+vendored schema under GPL-2.0. The consequence is stated rather than buried — **anyone taking
+a library dependency on this crate takes the GPL-2.0 obligation with it**, which is a cost
+this section pays deliberately and which OQ-13 is about.
+
+**Two alternatives, and why neither wins.**
+
+1. **Trim `api.proto` to the messages Oko uses and stay MIT.** Oko touches about fifteen of
+   the file's 123 messages and enums, so the trim is bounded, but the envelope oneofs
+   (`ClientOriginatedMessage`, `ServerOriginatedMessage`) must keep their tags to stay on the
+   wire, and every field number that survives came from the GPL-2.0 file. That reduces the
+   volume copied without clearly changing what was copied, which is the wrong trade for a
+   phase whose whole job is to stop misdescribing the artifact. **It is also a rewrite of the
+   one file `rules/iterm-api.md` treats as the fixed point**, and §2.1 pinned it by commit and
+   hash precisely so a schema change would be a visible diff — trimming it makes every future
+   iTerm2 diff unreadable against a pinned upstream.
+2. **Declare the whole thing GPL-2.0.** Simplest to defend and gives away more than intended:
+   it would relicense 3,500 lines Oko wrote to describe a 49 KB file it vendored.
+
+**`--licenses` is that decision in the product, and it is the only reason the flag exists.**
+`LICENSE` and `proto/NOTICE.md` are both in the tarball and neither is anywhere a person who
+typed `cargo install oko-iterm2` will ever look — `cargo` unpacks to a registry cache and puts
+a binary on `PATH`, and the two files stay in the cache. So the licence facts, which this
+section has just spent a page getting right, would be *less* reachable after publishing than
+they are in a clone. `oko --licenses` prints Oko's MIT line and the `api.proto` notice —
+project, commit, hash and GPL-2.0 — and is the whole path by which an installed Oko can answer
+"what did I just install". It is deliberately **not** a dependency-licence dump: `cargo
+install` builds from source and the manifest already names every dependency, so a generated
+list of forty transitive crates would bury the one fact that is genuinely surprising.
+
+**`--help` finishes what `--version` started.** §2.14 established that answering ahead of
+`Watcher::connect` is what keeps a consumer's probe bounded, and fixed exactly one flag.
+`oko --help` today builds a `Watcher`, opens the alternate screen and draws the dashboard —
+and so does `oko --hlep`, and `oko --licenses` before this phase adds it. That is tolerable
+for a tool whose only users clone it and read `src/main.rs`; it is the **first thing a
+stranger types**, and answering it with a full-screen takeover of their terminal is the
+worst first contact this tool could arrange. So: **`--help`/`-h` and `--licenses` join
+`--version` in the early block, and an unrecognised leading `--flag` becomes a usage line on
+stderr with a non-zero exit** rather than a dashboard. The last clause is the one that
+changes shipped behaviour, and §2.14 carries a dated note saying so.
+
+**The rule that keeps this from growing a dependency.** §2.14 said parsing is a scan for the
+first recognised flag and that the phase adds no argument parser. That still holds and is now
+load-bearing rather than incidental: `clap` would bring a derive macro, a builder API and a
+help format Oko does not control, to serve six flags whose entire grammar is "a flag, and
+sometimes one or two operands". `src/main.rs:parse_command` stays a hand-written scan, and
+the help text stays a string literal — which also means the help text and the README can
+disagree, so the gate checks them against each other rather than trusting either.
+
+**What publishing does not change.** No schema bump — `--follow`'s header is
+`{"oko":"<version>","schema":1}` and Phase 7 touches neither field's meaning (OQ-14 is about
+which version string that becomes, not about the schema). No new capability: §1.1's non-goals
+are untouched, the dashboard draws exactly what Phase 6 left, and nothing here is visible in
+Oko's own table. **Oko stays macOS-only and stays honest about it** — `src/iterm/client.rs`
+shells to `/usr/bin/osascript` and reads `~/Library/Application Support`, so the crate builds
+on Linux and cannot work there. That is a `README` and metadata problem, not a code one, and
+it is the second thing a stranger needs to learn before the first `cargo install`.
 
 ## 3. Open questions
 
@@ -823,7 +948,7 @@ reader that draws, and the writer is gone by the time the reader hears about it.
   rather than as their last value. These are not exclusive.~~
 - **OQ-5 — Can Oko set, read and *watch* `user.okoName` on a session that is not its own?**
   **RESOLVED 2026-08-15, during Phase 4's review round: yes, all three.** Measured by
-  `src/bin/probe.rs:var_spike` against iTerm2 3.6.11, writing to a session the probe does not
+  `src/bin/oko-probe.rs:var_spike` against iTerm2 3.6.11, writing to a session the probe does not
   occupy: the set returns `OK`, the read-back returns the written string, and — the part that
   was not required to pass — `NOTIFY_ON_VARIABLE_CHANGE` on `user.okoSpike` **does** deliver,
   carrying the new value and the session identifier. So §2.10's storage decision stands, and
@@ -1094,6 +1219,66 @@ reader that draws, and the writer is gone by the time the reader hears about it.
   of its own; adding a field a consumer must ignore is not a compatible extension when the
   consumer's contract is "a header you do not recognise draws nothing".
 
+- **OQ-13 — Should the library half be published at all?** *(design call — blocks nothing in
+  Phase 7, and decides who inherits §2.15's GPL-2.0 obligation)* The crate has a lib target.
+  `src/lib.rs` exports `oko::iterm` and `oko::status`, and it exists because three binaries
+  share one client — not because anyone asked for a library. Publishing it makes that internal
+  seam a public API on crates.io, and two costs follow that were never accepted. **The first
+  is the licence**: a binary user takes GPL-2.0 code onto their disk and runs it, which
+  distributes nothing; a crate that *depends* on `oko-iterm2` links the generated schema into
+  its own artifact, so §2.15's obligation lands on a stranger who wrote `oko-iterm2 = "0.1"`
+  and read a one-line description. **The second is semver**: `Watcher::execute` went public in
+  Phase 6 for one reason (§2.14, "two would drift") and `Client` has been reshaped in three
+  phases. Nothing in this document has ever promised that surface is stable, and publishing it
+  is how such a promise gets made by accident. **Three answers.** Publish it as-is and accept
+  both. Publish it with the lib documented as an implementation detail carrying no semver
+  promise — honest, and the weakest of the three, because a doc comment is not what `cargo
+  update` reads. Or give the lib no public surface at all in the published crate and let the
+  binaries be the product, which is §2.13's decision — *a stream, not a library* — applied to
+  the distribution rather than to the consumer, and is the answer this question expects to
+  land on. **What settles it is whether anyone wants it**: §2.13 turned down a library for
+  consumers on the argument that a stream degrades to nothing and a linked dependency does
+  not, and no consumer has asked since.
+- **OQ-14 — Which version is the first published one?** **RESOLVED 2026-09-02, at Phase 7's
+  close-out: `0.2.0`, and the gate is what settled it rather than the argument below.**
+
+  **Check 6 measured the thing this question is about, and the answer was worse than
+  predicted.** The old build and the new one, run against the same window, produced captures
+  that were **byte-identical — header included**. Not "two artifacts answering to one number"
+  as an inference from reading `src/follow.rs:header_line`, but two artifacts that a consumer
+  holding both streams cannot separate by any byte either of them writes. `--version` prints
+  the same nine bytes from both. That is the collision this question raised, observed rather
+  than reasoned about, and it is what tipped a question that had been genuinely balanced.
+
+  **The argument against was real and is what the resolution pays.** `0.2.0` does imply a
+  feature release, and Phase 7 adds three flags and a rename that no existing user asked
+  for. It is accepted because the asymmetry this question already named is decisive: a
+  version can be bumped and cannot be un-published, so the cost of being wrong here is one
+  misleading minor number, against a permanent inability to tell a crates.io artifact from a
+  local build. **Every `0.2.x` came from crates.io** is a fact worth one overstated bump.
+
+  What it costs, stated exactly: one changed string in a header line
+  (`{"oko":"0.2.0","schema":1}`) that `rules/follow-stream.md` documents a consumer as
+  ignoring except for `schema`. **No schema bump** — `schema` stays `1`, no row field moves,
+  and panex-tui, which has been reading that line since 2026-08-16, is unaffected by
+  construction. Check 6 was re-run after the bump and the only difference between the two
+  captures is that field, which is what the check permits and now, for the first time, has
+  something to permit.
+
+  *(design call — blocks nothing;
+  decides one string a consumer may already have parsed)* `0.1.0` is not just the manifest,
+  it is the first line of every `--follow` stream (`src/follow.rs:header`, which reads
+  `CARGO_PKG_VERSION`), and `rules/follow-stream.md` documents that line as naming the build.
+  panex-tui has been reading it since 2026-08-16. **Publishing `0.1.0` reuses a version string
+  that already means "a build from Ivapo/oko" for something that now also means "the crates.io
+  release"**, so two different artifacts answer to one number and neither `--version` nor the
+  stream header can tell them apart. **Publishing `0.2.0` instead** costs one changed string in
+  a header a consumer is documented to ignore except for `schema`, and buys a clean boundary:
+  every `0.2.x` came from crates.io. The argument against is that `0.2.0` implies a feature
+  release and Phase 7 adds three flags and a rename. **This question is cheap to get wrong in
+  one direction only** — a version can be bumped and cannot be un-published — so the phase's
+  gate records what the header says rather than assuming it.
+
 ## 4. Implementation phases
 
 Strictly sequential. Phase 2 cannot be planned until Phase 1 has chosen a transport;
@@ -1112,7 +1297,7 @@ in §3, not a user-facing artifact.*
   - `cargo init` the crate: `Cargo.toml`, `src/main.rs`, ratatui not yet a dependency.
   - Document, in `rules/iterm-api.md`, the human steps to enable the API and what the
     authorization prompt asks — a second person must be able to reproduce the setup.
-  - A minimal non-TUI binary (`src/bin/probe.rs`) that connects to the API by whichever
+  - A minimal non-TUI binary (`src/bin/oko-probe.rs`) that connects to the API by whichever
     transport OQ-1 selects, and does exactly three things, **in this order**:
     1. **Establishes the join key.** Prints its own `TERM_SESSION_ID`, and beside it the
        identifier the API gives for the same pane, so the two can be compared by eye
@@ -1239,7 +1424,7 @@ can use.*
      session it named before, and Enter jumps there rather than to a neighbour.
 - **Close-out:** seeds `rules/dashboard-ui.md` (the table, the key bindings, the refresh
   path) and updates `rules/iterm-api.md` for anything the client learned — including
-  **re-pointing its `sources` at `src/iterm/`**, and saying whether `src/bin/probe.rs`
+  **re-pointing its `sources` at `src/iterm/`**, and saying whether `src/bin/oko-probe.rs`
   survives the phase. Left alone, that rule regenerates from a throwaway spike and the
   linter cannot see it, because `probe.rs` still exists. It sits close to its cap — which
   has been raised twice already as measurements landed — so the update raises it again or
@@ -1360,7 +1545,7 @@ once, which is exactly when they often do not.*
 - **Scope:**
   - ~~Settle OQ-5 and OQ-6 during this phase's review round, not during implementation.~~
     Both settled 2026-08-15, in that round. OQ-5 was measured by
-    `src/bin/probe.rs:var_spike`, which the round added and which stays as a diagnostic;
+    `src/bin/oko-probe.rs:var_spike`, which the round added and which stays as a diagnostic;
     `src/iterm/client.rs:set_variable` is the write path it proved and the one this phase
     builds on.
   - **The name** (`src/status.rs` or a new `src/name.rs`, `src/iterm/watch.rs`, `src/ui.rs`).
@@ -1853,3 +2038,217 @@ defect in the gate before it found anything about the code.*
   top of the two that exist, plus whatever the round's findings and the reconciliation require
   — and the PR leaves draft when the round converges, which is the gate the push is the unit
   for.
+
+### Phase 7 — publishing it: a crate a stranger can install, and what it says it is
+
+*Produces the observable: **no**, and the argument is a fourth distinct one — the first three
+were Phase 1 (mechanism, hoping for a consumer), Phase 5 (a stream, hoping for a reader) and
+Phase 6 (a reader asked). This phase produces **no new behaviour for anyone who already has
+Oko**: the dashboard draws exactly what Phase 6 left, the stream is byte-identical, and a
+`git pull` here changes five flags across three binaries, one binary's name, and what an
+unrecognised flag does. What it produces is a **second
+population** — people who never clone this repository — and the observable is unchanged for
+them by construction: the whole point is that `cargo install oko-iterm2 && oko` reaches the
+same live table §1 describes. **The risk that makes this worth stating rather than assuming**
+is that the phase is entirely metadata, documentation and argument handling, which is exactly
+the shape of work that can be done thoroughly and still leave the install broken; so the gate
+below is built almost entirely out of running the published artifact rather than reading it,
+and check 1 deliberately installs from a packaged tarball rather than from this directory.*
+
+- **Scope.**
+  - **`Cargo.toml`** — `name = "oko-iterm2"`; `license = "MIT AND GPL-2.0"`; three explicit
+    `[[bin]]` targets (`oko` → `src/main.rs`, `oko-hook` → `src/bin/oko-hook.rs`, `oko-probe`
+    → `src/bin/oko-probe.rs`) so the binary names survive the package rename, and
+    **`[lib] name = "oko"`** so the crate still compiles (§2.15); `rust-version` set to
+    **the maximum of the edition floor and every dependency's declared `rust-version` in the
+    locked graph**, which is the quantity `cargo install` has to honour and is **1.88.0**,
+    not edition-2024's 1.85.0 — `ratatui 0.30.2`, `time 0.3.55` and `darling 0.24.0` each
+    declare 1.88.0 (measured 2026-09-02 by `cargo metadata` over `Cargo.lock`). **The
+    edition floor is the wrong quantity and understating it is the failure that matters**: a
+    declared 1.85.0 promises a toolchain on which this does not build, and nothing on this
+    machine notices, because it has exactly one toolchain (stable 1.97.1) and every check
+    below would run on it. Check 9 is what makes "verified against a toolchain" executable
+    rather than a wish. `homepage`/`documentation` pointing at the repository. The comment above `[dependencies]`
+    that says to read `proto/NOTICE.md` before publishing anywhere is **rewritten, not
+    deleted** — it becomes the record that the notice was read and what it decided (§2.15).
+  - **`src/bin/probe.rs` → `src/bin/oko-probe.rs`** (§2.15). A rename and nothing else: no
+    change to what it does — but it is **five strings, not three**. The `//!` usage block's
+    three lines, and then `main`'s `eprintln!("probe: {e:#}")` and `run`'s
+    `usage: probe activate <session-id>`. Those last two are the ones the phase is actually
+    about: §2.15 renames the binary because a stray `probe` is unattributable to Oko when it
+    collides, and a binary that still says `probe:` when it fails keeps precisely that
+    defect. Its `ADVISORY_NAME` is already `oko-probe` and does not move.
+    **Every citation of the old path moves with it.** Three places cite it with a
+    `:var_spike` suffix — `rules/iterm-api.md`, §3's OQ-5 and Phase 4's scope — and those are
+    corrections of where a file lives, not rewrites of what those passages decided. Check 8
+    is what catches the one that gets missed.
+  - **`src/main.rs:run`** — the early block gains `--help`/`-h` and `--licenses` beside
+    `--version`, and gains a final arm: a leading argument starting with `-` that nothing
+    recognised is a usage line on **stderr** and exit **2**, never a dashboard. The help text
+    and the licence text are string literals; `parse_command` stays a hand scan and **no
+    argument-parser dependency is added** (§2.15).
+    **Exit 2 does not come back through `run`'s `Result`.** `src/main.rs:main` maps every
+    `Err` to `eprintln!("oko: {e:#}")` and `exit(1)`, so a refusal returned as an error would
+    be exit 1 wearing an `oko: ` prefix that a usage line should not have. The arm calls
+    `std::process::exit(2)` itself; 2 is the usual usage-error convention and is stated here
+    rather than derived from anything.
+    **Two consequences of keeping the scan shape, stated rather than left to be discovered.**
+    `run` tests `--version` and `--follow` with `std::env::args().skip(1).any(…)` and
+    `parse_command` scans for the first recognised flag *anywhere*, so the new arm fires only
+    when **nothing** was recognised and the first argument begins with `-`. `oko --hlep
+    --version` therefore still prints a version, and a non-flag operand — `oko notaflag` —
+    still draws the dashboard. Both are the shape Phase 6 shipped; this phase narrows
+    neither, and says so because an implementer reading "an unrecognised leading flag" would
+    be right to wonder.
+  - **`oko-hook --help` and `oko-probe --help`** (`src/bin/oko-hook.rs:run`, and the probe).
+    §2.15's argument is about what a stranger types first and it is not confined to `oko`.
+    `oko-hook` matches only `--print-settings` and then blocks in `read_to_string` on stdin,
+    so `oko-hook --help` **hangs** — a worse first contact than the dashboard takeover this
+    phase exists to fix, because nothing on screen says what happened. **The probe does not
+    fall through** — `run`'s `Some(other)` arm already `bail!`s — but it answers with
+    `probe: unknown command "--help"; …` and **exit 1**: no usage text, the wrong exit code,
+    and the un-renamed prefix this phase is otherwise removing. Each gains `--help`/`-h`
+    printing its own usage to
+    stdout and exiting 0: for `oko-hook`, the two things it does; for the probe, its `//!`
+    block's three lines. **Decided here rather than left to check 2**, which named a
+    fall-through as a finding and would therefore have produced one by construction.
+  - **`src/lib.rs`** — its module doc names `probe`; that is one word.
+  - **`README.md`** — `cargo install oko-iterm2` as the primary install path, with
+    `--path .` kept for contributors; the three binary names; a macOS-only line where a
+    stranger meets it rather than at the bottom; the licence paragraph reconciled with
+    `MIT AND GPL-2.0`; and **the flag list reconciled with the help text in both
+    directions**. It documents `--follow`, `--version`, `--activate` and `--set-name` today
+    and **not `-V`**, so check 4 fails against a correct help text until it gains one.
+  - **Not in scope, each a decision rather than an omission:** no CI release workflow, no
+    Homebrew tap, no `cargo-dist`, no man page — those are how you publish *repeatedly*, and
+    this phase is about publishing *correctly* once. No dependency-licence dump in
+    `--licenses` (§2.15). No lib-surface change: **OQ-13 is raised by this phase and not
+    settled in it**, because the answer changes what `cargo package` contains and would make
+    the gate below measure two things at once. No `cargo publish` in the gate — the gate ends
+    at a verified artifact, and pressing publish is irreversible and belongs to a human.
+- **Exit gate.** Checks 1–4, 8 and 9 need no iTerm2 and no API; only 5–7 need a real
+  window — check 8 is `cargo` and the linter, which run headless. **Nothing in
+  this gate may be marked from reading a diff**, which matters more here than in any previous
+  phase because every artefact under test is a file whose correctness is a claim about a
+  machine that is not this one.
+  1. **The tarball installs and runs somewhere this repo is not.** **Two things first, and
+     each is how this check otherwise misreports.** `~/.cargo/.crates.toml` has package `oko`
+     owning `oko`, `oko-hook` and **`probe`** today, all three live in `~/.cargo/bin` — so
+     installing `oko-iterm2` either refuses (`binary `oko` already exists`) or, forced,
+     leaves `probe` behind owned by the old package, and "**`probe` does not appear**" then
+     records a failure against a rename that worked. **`cargo uninstall oko` first.** And
+     **`~/.cargo/bin/oko` is the only pre-Phase-7 build on this machine** and check 6 needs
+     one to diff against, so copy it aside before installing — or build that side in a
+     `git worktree` at `ac0bdc7`, which is what a second person on another machine has to do
+     regardless and is the reproducible form of this check.
+     Then `cargo package`, then
+     `cargo install --path target/package/oko-iterm2-<v>` — *not* `--path .`. All three
+     binaries land in `~/.cargo/bin` as `oko`, `oko-hook`, `oko-probe`; **`probe` does not
+     appear**; `oko --version` from a directory outside this repository prints one line and
+     exits 0. Uninstall afterwards, and record whether `cargo uninstall oko-iterm2` removes
+     all three.
+  2. **`--help`, `--licenses` and a typo each answer without a terminal takeover.** Each of
+     `oko --help | cat`, `oko -h | cat`, `oko --licenses | cat` prints to **stdout**, exits
+     **0**, and leaves the terminal usable — run every one on a pipe, because a pipe is the
+     failure `ratatui::init()` produces and a bare terminal would hide it. Then `oko --hlep`:
+     **stderr**, **nothing on stdout**, exit **2**, and a usage line naming the real flags.
+     Repeat all four with the **iTerm2 API switched off** — identical results, since all of
+     them are ahead of the connection. The `--hlep` line carries **no `oko: ` prefix**: that
+     prefix belongs to `src/main.rs:main`'s error path, which exit 2 deliberately does not
+     take, so seeing it means the refusal came back as an `Err` and is exit 1 in disguise.
+     Then `oko-hook --help` and `oko-probe --help`: each prints its own usage to **stdout**
+     and exits **0**. Run `oko-hook --help` **without redirecting stdin** — before this phase
+     it blocks in `read_to_string`, so its failure mode is a hang rather than wrong output,
+     and a checker who feeds it `</dev/null` sees an EOF error instead and never meets it.
+  3. **`--licenses` says the thing `LICENSE` and `NOTICE.md` say.** Its output names MIT for
+     Oko's source, and for `api.proto` names iTerm2, the commit `f4ca0004`, the sha256 and
+     GPL-2.0. **Diff those five facts against `proto/NOTICE.md` by eye and record it** — the
+     literal is a copy and copies drift, which is the same failure `rules/session-commands.md`
+     shipped in Phase 6 and which check 6 there now guards.
+  4. **`--help` and the README do not disagree.** Every flag in the help text appears in
+     `README.md`, and every flag the README documents appears in the help text. There are
+     six, in eight spellings (`--version`/`-V`, `--help`/`-h`, `--licenses`, `--follow`,
+     `--activate`, `--set-name`), and the check is a list compared by hand, because §2.15 chose
+     a string literal over a parser and this is the cost of that choice, paid on purpose.
+     **The comparison is over `oko`'s own flags**, not every flag string in the file:
+     `oko-hook --print-settings` is documented in the README and will never be in
+     `oko --help`. The direction that actually bites is the other one — no `-V` in the README
+     today (scope, above).
+  5. **The dashboard is not collateral damage.** With the installed binary, in a real window:
+     `↑↓`, `↵` moves focus, `r` renames and commits, `q` quits and restores the terminal.
+     The early-block edit is the only change to a path a human uses, and this is the check
+     aimed at it.
+  6. **`--follow` is byte-identical to Phase 5's, except the version string.** Run the old
+     build and the new one against the same window, capture both, and diff. **The only
+     permitted difference is the `oko` field of the header line**; `schema` stays `1` and no
+     row field changes. Record the version string the header carries — that is OQ-14's
+     evidence and the reason it cannot be settled by argument.
+  7. **`oko-probe` still works, under its new name.** `oko-probe` prints identity and the
+     window's sessions; `oko-probe watch` prints notifications. Phase 6's gate is built out of
+     this binary, so a rename that broke it would take a previous phase's falsifiability with
+     it.
+  8. **`cargo test`, `cargo clippy` and `cargo package` are all clean**, and **`spec-lint
+     --strict` passes** — the flag *is* the check rather than decoration. An unresolvable
+     citation is a **warning**, `.spec-lint.yaml` sets no `unresolved_path_severity`, and
+     plain `spec-lint` prints the warning and still **exits 0**: run without `--strict` this
+     check passes over exactly the breakage it exists to catch. Three places cite the probe's
+     old path with a `:var_spike` suffix — `rules/iterm-api.md`, §3's OQ-5 and Phase 4's
+     scope — and the linter is what finds whichever one the rename missed. Also assert the
+     target names from `cargo metadata`: **one lib named `oko`**, three bins named `oko`,
+     `oko-hook`, `oko-probe`. That is the cheap form of the failure §2.15 measured, and it is
+     one command rather than a build.
+  9. **The declared floor is a floor.** Re-derive it — the maximum `rust-version` over the
+     locked graph — **comparing versions as numbers, not strings**: most of the graph
+     declares two components (`instability 0.3.13` is `"1.88"`, and it ties the maximum), so
+     a lexicographic max answers a different question. Confirm the manifest agrees; then
+     **`rustup toolchain install 1.88.0`
+     and `cargo +1.88.0 check --bins`**, which must succeed. This is the check that makes
+     "verified against a toolchain, not guessed" mean something on a machine with one
+     toolchain, and it is the only way an understated floor is visible here: every other
+     check runs on stable 1.97.1, where 1.85.0 and 1.88.0 are indistinguishable. If the
+     build fails, the floor rises to whatever it needs and the number is recorded, not
+     argued.
+- **Close-out.** **Reconciliation, and two of these are forced rather than discretionary.**
+  `rules/session-commands.md` (48/55) gains `--help`, `--licenses` and the unknown-flag
+  refusal — it is the file that owns what the CLI spells, and it has the headroom. **Its
+  `covers` line widens in the same pass, and that is not bookkeeping**: it says today that
+  the file covers *the two things Oko does to a session*, which a help text, a licence notice
+  and a refusal are not, and `covers` is the regeneration target (§8.1) — text outside it is
+  text the next `/sync-rules` drops as unmanaged.
+  `rules/dashboard-ui.md` is at **112/112**, exactly at its cap, and its "Three branches sit
+  ahead of all of it" sentence becomes wrong the moment `--help` lands. Phase 6's close-out
+  named this: *"The next change there is the one that raises or cuts, and it inherits that
+  choice from this phase rather than meeting it fresh."* **This is that phase, and it must
+  raise or cut deliberately and say which** — the expected answer is a raise, because the
+  sentence needs a clause and nothing in that file is redundant, but the choice is made in the
+  round and not here. **`rules/claude-status.md` (121/124) is the one this round added**: it declares
+  `src/bin/oko-hook.rs` among its `sources`, its `covers` reaches "the hook binary", and it
+  already documents `oko-hook --print-settings` — so the hook's new `--help` lands inside its
+  regeneration target and belongs there rather than in `session-commands.md`. Three lines of
+  headroom, so no raise-or-cut. `rules/iterm-api.md` (113/115) changes one citation path and
+  nothing else — and it is not the only file that does: §3's OQ-5 and Phase 4's scope carry the same
+  `src/bin/oko-probe.rs:var_spike` citation, and all three move together. **Those two are
+  corrections of where a file lives, not edits to what a shipped phase decided**, which is
+  the distinction that keeps an append-only document honest while its citations stay
+  resolvable (§5). Check 8 is the backstop. `rules/follow-stream.md` (85/85) **does need one, and check 6 is not what finds it**: the
+  file names `oko --version` as coming *ahead of every other branch* (`src/main.rs:run`),
+  which stops being a description of that block the moment `--help` and `--licenses` join it.
+  Check 6 diffs stream bytes and is silent about that sentence — it was reached by reading,
+  which is why it is written down here rather than left for the gate to miss. At its cap, so
+  it meets the same raise-or-cut rule and says which. **`README.md` is substantially rewritten in its install and licence sections**, which
+  is the largest documentation change since Phase 5 and the one a stranger actually reads.
+  `proto/NOTICE.md` gains one line recording that Oko is published and under what expression;
+  its provenance table is untouched. **The `CLAUDE.md` observable line is re-read and the
+  expected answer is "no change"** — nothing here alters what a human sees. ~~Raises **OQ-13**
+  and **OQ-14** and resolves neither;~~ check 6 produces OQ-14's evidence and check 1 produces
+  the fact OQ-13 turns on, which is that the binaries are the whole product a stranger
+  installs. **CORRECTED 2026-09-02 (this phase's own close-out): OQ-14 is resolved here, not
+  merely raised.** The sentence above was written expecting check 6's evidence to inform a
+  later decision; the evidence turned out to be decisive on arrival — byte-identical
+  captures, header included — so the phase bumped to `0.2.0` and closed the question. **OQ-13
+  is raised and not settled**, as written: nothing in this gate bears on whether the lib is
+  published with a public surface. Commit plan: **one push to `feat/publish-crate`** — the spec and review-record
+  commit first, then the manifest and rename, then the flags, then the documentation, and the
+  PR leaves draft when the round converges. **`cargo publish` is not in this plan**: the
+  branch ends at a verified tarball and a human presses the button, because the one thing
+  crates.io does not offer is a second first release.

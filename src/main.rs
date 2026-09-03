@@ -24,6 +24,63 @@ use ui::AppEvent;
 /// The name iTerm2 shows in its API console and keeps in its permissions list.
 const ADVISORY_NAME: &str = "oko";
 
+/// Every flag Oko answers to, in one string literal.
+///
+/// A literal rather than a parser: `clap` would bring a derive macro, a builder API and a
+/// help format Oko does not control, to serve six flags whose entire grammar is "a flag,
+/// and sometimes one or two operands" (§2.15). The cost of that choice is that this text
+/// and `README.md` can disagree, so the gate checks them against each other in both
+/// directions rather than trusting either.
+const USAGE: &str = "\
+oko — a dashboard tab inside iTerm2 showing what every other tab in the window is doing.
+
+usage:
+  oko                                  draw the dashboard for this window
+  oko --follow                         newline-delimited JSON on stdout, no terminal
+  oko --activate <session-id>          jump focus to that session, its tab and its window
+  oko --set-name <session-id> [name]   name that session; no name clears it
+  oko --version, -V                    print the version and exit, touching nothing
+  oko --licenses                       print this crate's licence and its third-party notice
+  oko --help, -h                       print this
+
+Run it from a tab of the window you want watched: Oko shows the window it is itself in.
+Session ids are the ones `--follow` publishes. Keys: ↑↓ select, ↵ jump, r rename, q quit.
+
+Requires macOS and iTerm2 with the scripting API enabled
+(Settings → General → Magic → Enable Python API). The status column additionally needs
+Claude Code, through the hooks `oko-hook --print-settings` prints.";
+
+/// What a person who typed `cargo install oko-iterm2` has no other way to learn.
+///
+/// `LICENSE` and `proto/NOTICE.md` are both in the tarball and neither is anywhere they
+/// will look — `cargo` unpacks to a registry cache and puts a binary on `PATH`. It is
+/// deliberately **not** a dependency-licence dump: `cargo install` builds from source and
+/// the manifest already names every dependency, so forty transitive crates would bury the
+/// one fact that is genuinely surprising (§2.15).
+///
+/// The five `api.proto` facts here are a copy of `proto/NOTICE.md`, and copies drift —
+/// which is why the gate diffs them by eye rather than trusting this.
+const LICENSES: &str = "\
+oko-iterm2 — Oko's own source is MIT.
+
+    Copyright (c) 2026 Ivapo
+    https://github.com/Ivapo/oko/blob/main/LICENSE
+
+One file in this crate is not Oko's work and is not covered by that licence:
+
+    proto/api.proto
+    Project   gnachman/iTerm2 — https://github.com/gnachman/iTerm2
+    Commit    f4ca0004
+    sha256    6f1a4e753e9c150d29454e9f83dfe91cc8d49465dde5f5aa3bda75cbd4482e31
+    Licence   GPL-2.0, as iTerm2 is licensed
+
+It is vendored verbatim as the interface definition for iTerm2's scripting API — the wire
+format a client must speak to talk to iTerm2 at all — and is compiled at build time. So the
+crate declares `MIT AND GPL-2.0`: that is what this artifact contains, not a choice between
+the two. Taking a *library* dependency on this crate takes the GPL-2.0 obligation with it.
+
+Full provenance is in proto/NOTICE.md. This records provenance and is not legal advice.";
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("oko: {e:#}");
@@ -67,8 +124,30 @@ fn run() -> Result<()> {
     // out. Falling through to the dashboard on an unrecognised flag makes the question
     // unanswerable — with a pipe for stdout that path panics inside `ratatui::init()`, so
     // what the caller learns is a dead child and an escape sequence.
-    if std::env::args().skip(1).any(|arg| arg == "--version" || arg == "-V") {
+    //
+    // `--version` stays first of the three: it is the one a *program* calls, and §2.14's
+    // bounded probe is keyed to it answering ahead of everything else.
+    let has = |flag: &str, short: Option<&str>| {
+        std::env::args().skip(1).any(|arg| arg == flag || Some(arg.as_str()) == short)
+    };
+    if has("--version", Some("-V")) {
         println!("oko {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
+    // The first thing a stranger types. Before this it built a `Watcher`, opened the
+    // alternate screen and drew the dashboard — the worst first contact this tool could
+    // arrange, and the same thing `oko --hlep` got.
+    if has("--help", Some("-h")) {
+        println!("{USAGE}");
+        return Ok(());
+    }
+
+    // `cargo` unpacks a crate to a registry cache and puts a binary on `PATH`, so `LICENSE`
+    // and `proto/NOTICE.md` ship in the tarball and land nowhere a person will ever look.
+    // This is the whole path by which an installed Oko can answer "what did I just install".
+    if has("--licenses", None) {
+        println!("{LICENSES}");
         return Ok(());
     }
 
@@ -85,6 +164,22 @@ fn run() -> Result<()> {
     if let Some(cmd) = parse_command(&args)? {
         let mut watcher = Watcher::connect(ADVISORY_NAME)?;
         return watcher.execute(cmd);
+    }
+
+    // Nothing above recognised anything and the first argument is a flag. Before this
+    // phase that drew a dashboard, which on a pipe is a panic inside `ratatui::init()`.
+    //
+    // **Exit 2 is taken here rather than returned.** `main` maps every `Err` to
+    // `oko: {e}` and exit 1, so a refusal coming back as an error would be exit 1 wearing
+    // a prefix that belongs to a failure rather than to a usage line.
+    //
+    // It fires only when *nothing* was recognised: `run` scans the whole argv and so does
+    // `parse_command`, so `oko --hlep --version` still prints a version and a non-flag
+    // operand still draws the dashboard. That is the shape Phase 6 shipped, narrowed
+    // neither way.
+    if args.first().is_some_and(|arg| arg.starts_with('-')) {
+        eprintln!("{USAGE}");
+        std::process::exit(2);
     }
 
     // Connect before the alternate screen exists: "the API is off" is a message a human

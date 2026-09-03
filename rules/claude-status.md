@@ -25,6 +25,9 @@ absolute path that `oko-hook --print-settings` fills in from `std::env::current_
 never edits that file itself. A binary, not a shell script, because parsing the event JSON
 in shell needs `jq`.
 
+`--help`/`-h` prints its two forms and exits 0, matched **ahead of the stdin read** — on
+nothing but `--print-settings` it answered `--help` by blocking in `read_to_string` forever.
+
 | Event (matcher) | Writes |
 |---|---|
 | `SessionStart` (`startup`, `resume`, `clear`) | `ready` |
