@@ -266,6 +266,10 @@ mod tests {
         // Not `null` — *absent*. The row's `jobName` is `node`, which is never displayed, is
         // no identity test, and moves on its own (OQ-7).
         assert!(row.get("job").is_none(), "{row}");
+        // **Phase 9's field is not published either** (§2.17). This row's `file` is set, and
+        // the schema carries no trace of it — which is what makes a Helix file switch build a
+        // snapshot whose line matches the last one sent, and so a line the stream suppresses.
+        assert!(row.get("file").is_none(), "{row}");
         assert_eq!(row["status"], "waiting");
         assert_eq!(row["age"], ">10m");
         assert_eq!(row["name"], "api work");
