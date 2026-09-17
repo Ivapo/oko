@@ -18,10 +18,11 @@ use prost::Message as _;
 use tungstenite::{Message as WsMessage, WebSocket, http};
 
 use super::api::{
-    self, ActivateRequest, ClientOriginatedMessage, ListSessionsRequest, ListSessionsResponse,
-    Notification, NotificationRequest, NotificationType, ServerOriginatedMessage,
-    VariableMonitorRequest, VariableRequest, VariableScope,
-    client_originated_message::Submessage as Req, server_originated_message::Submessage as Resp,
+    self, ActivateRequest, ClientOriginatedMessage, GetBufferRequest, LineRange,
+    ListSessionsRequest, ListSessionsResponse, Notification, NotificationRequest,
+    NotificationType, ServerOriginatedMessage, VariableMonitorRequest, VariableRequest,
+    VariableScope, client_originated_message::Submessage as Req,
+    server_originated_message::Submessage as Resp,
 };
 
 /// How long a request waits for its response before the connection is called dead. Long,
@@ -220,14 +221,55 @@ impl Client {
         }
     }
 
+    /// Subscribes to one notification type.
+    ///
+    /// **`session` is the notification's own session argument**, which most types ignore:
+    /// layout, new-session and terminate-session are posted for every window whatever is
+    /// passed, and `NOTIFY_ON_VARIABLE_CHANGE` carries its identifier inside the
+    /// [`VariableMonitorRequest`] instead — the schema says in so many words that `session`
+    /// is not used for it. `NOTIFY_ON_SCREEN_UPDATE` is the one type Oko sends it for, and
+    /// it is why this argument exists (§2.17).
     pub fn subscribe(
         &mut self,
         notification_type: NotificationType,
+        session: Option<&str>,
+        variable_monitor: Option<VariableMonitorRequest>,
+    ) -> Result<()> {
+        self.notification_request(notification_type, session, true, variable_monitor)
+    }
+
+    /// Cancels one subscription — the same request with `subscribe: Some(false)`.
+    ///
+    /// It takes no [`VariableMonitorRequest`] because nothing here ever cancels a variable
+    /// subscription: a session that leaves the window keeps those on purpose
+    /// ([`watch::Watcher::rescan`](super::watch)), and the only thing with a life shorter
+    /// than the connection's is a Helix pane's screen.
+    pub fn unsubscribe(
+        &mut self,
+        notification_type: NotificationType,
+        session: Option<&str>,
+    ) -> Result<()> {
+        self.notification_request(notification_type, session, false, None)
+    }
+
+    /// Both directions, so the two cannot drift apart.
+    ///
+    /// **Three statuses are answers rather than failures.** `ALREADY_SUBSCRIBED` says the
+    /// subscription asked for exists and `NOT_SUBSCRIBED` says the same thing from the other
+    /// side — in both cases the state asked for is the state there is, and calling a
+    /// satisfied postcondition an error is how one refused round trip becomes a dead
+    /// watcher. `SESSION_NOT_FOUND` is §2.17's reasoning for the screen read, one event
+    /// earlier: a pane can close between the rescan that found it and the request about it.
+    fn notification_request(
+        &mut self,
+        notification_type: NotificationType,
+        session: Option<&str>,
+        subscribe: bool,
         variable_monitor: Option<VariableMonitorRequest>,
     ) -> Result<()> {
         let resp = self.call(Req::NotificationRequest(NotificationRequest {
-            session: None,
-            subscribe: Some(true),
+            session: session.map(str::to_owned),
+            subscribe: Some(subscribe),
             notification_type: Some(notification_type as i32),
             arguments: variable_monitor
                 .map(api::notification_request::Arguments::VariableMonitorRequest),
@@ -235,10 +277,15 @@ impl Client {
         let Resp::NotificationResponse(r) = resp else {
             bail!("expected a notification response, got {resp:?}");
         };
-        match api::notification_response::Status::try_from(r.status.unwrap_or_default()) {
-            Ok(api::notification_response::Status::Ok) => Ok(()),
-            Ok(status) => bail!("subscribing to {notification_type:?} failed: {status:?}"),
-            Err(_) => bail!("subscribe returned an unknown status: {:?}", r.status),
+        use api::notification_response::Status;
+        let what = if subscribe { "subscribing to" } else { "unsubscribing from" };
+        match Status::try_from(r.status.unwrap_or_default()) {
+            Ok(Status::Ok | Status::AlreadySubscribed | Status::NotSubscribed) => Ok(()),
+            Ok(Status::SessionNotFound) => Ok(()),
+            Ok(status) => bail!("{what} {notification_type:?} failed: {status:?}"),
+            Err(_) => {
+                bail!("{what} {notification_type:?} returned an unknown status: {:?}", r.status)
+            }
         }
     }
 
@@ -248,12 +295,28 @@ impl Client {
     pub fn watch_variable(&mut self, session_id: &str, name: &str) -> Result<()> {
         self.subscribe(
             NotificationType::NotifyOnVariableChange,
+            // Not an omission: the schema states the request's `session` field is unused for
+            // this type, and the identifier below is what scopes it.
+            None,
             Some(VariableMonitorRequest {
                 name: Some(name.to_string()),
                 scope: Some(VariableScope::Session as i32),
                 identifier: Some(session_id.to_string()),
             }),
         )
+    }
+
+    /// Subscribes one session to screen updates, or cancels it (§2.17).
+    ///
+    /// The notification carries the session id and nothing else — it cannot say what
+    /// changed, which is why a read is a separate round trip and why the watcher waits for
+    /// the updates to stop before taking one.
+    pub fn watch_screen(&mut self, session_id: &str, on: bool) -> Result<()> {
+        if on {
+            self.subscribe(NotificationType::NotifyOnScreenUpdate, Some(session_id), None)
+        } else {
+            self.unsubscribe(NotificationType::NotifyOnScreenUpdate, Some(session_id))
+        }
     }
 
     pub fn list_sessions(&mut self) -> Result<ListSessionsResponse> {
@@ -296,6 +359,45 @@ impl Client {
             }
         }
         Ok(vars)
+    }
+
+    /// The rows of a session's screen, as text, and **nothing else** (§2.17).
+    ///
+    /// `screen_contents_only`, so no scrollback; `include_styles: false`, so no per-cell
+    /// style — which would be the bulk of the payload and is an anchor §2.17 measured and
+    /// rejected, since under this machine's theme every cell of the screen reports the same
+    /// background.
+    ///
+    /// **`SESSION_NOT_FOUND` is an ordinary answer and returns no rows**: a pane that closed
+    /// between its last screen update and this read is not a failure.
+    ///
+    /// **`GetBufferResponse.cursor` is deliberately dropped.** §2.17's first rule anchored on
+    /// it and was measured wrong twice over — once on the rule, which takes a counterfeit
+    /// status line whenever one sits between the cursor and the real one, and once on the
+    /// coordinates, which count buffer rows rather than screen rows and need
+    /// `windowed_coord_range`'s start subtracted. Handing the parser a field it must not use
+    /// is how that rule comes back.
+    pub fn screen(&mut self, session_id: &str) -> Result<Vec<String>> {
+        let resp = self.call(Req::GetBufferRequest(GetBufferRequest {
+            session: Some(session_id.to_string()),
+            line_range: Some(LineRange {
+                screen_contents_only: Some(true),
+                trailing_lines: None,
+                windowed_coord_range: None,
+            }),
+            include_styles: Some(false),
+        }))?;
+        let Resp::GetBufferResponse(r) = resp else {
+            bail!("expected a get-buffer response, got {resp:?}");
+        };
+        use api::get_buffer_response::Status;
+        match Status::try_from(r.status.unwrap_or_default()) {
+            Ok(Status::Ok) => {}
+            Ok(Status::SessionNotFound) => return Ok(Vec::new()),
+            Ok(status) => bail!("reading the screen of {session_id} failed: {status:?}"),
+            Err(_) => bail!("reading a screen returned an unknown status: {:?}", r.status),
+        }
+        Ok(r.contents.into_iter().map(|line| line.text.unwrap_or_default()).collect())
     }
 
     /// Sets one session-scope variable.

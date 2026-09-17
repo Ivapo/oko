@@ -189,8 +189,8 @@ impl Watcher {
         watcher.rescan(&list)?;
         // Both, because neither covers the other: closing a tab fires the
         // layout change, opening one fires only the new-session.
-        watcher.client.subscribe(NotificationType::NotifyOnLayoutChange, None)?;
-        watcher.client.subscribe(NotificationType::NotifyOnNewSession, None)?;
+        watcher.client.subscribe(NotificationType::NotifyOnLayoutChange, None, None)?;
+        watcher.client.subscribe(NotificationType::NotifyOnNewSession, None, None)?;
         watcher.client.set_read_timeout(IDLE_TICK)?;
         watcher.emitted = watcher.snapshot();
         Ok(watcher)

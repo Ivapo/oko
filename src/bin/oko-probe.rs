@@ -6,6 +6,8 @@
 //!     oko-probe                      identity, then the sessions of this window
 //!     oko-probe activate <session>   focus that session, its tab, and its window
 //!     oko-probe watch                print notifications as they arrive
+//!     oko-probe hx [<session>]       what every Helix pane has open, and how it is read
+//!     oko-probe screen-watch <s>…    one line per screen update, with the gap
 //!
 //! `watch` deliberately subscribes to **more** than the dashboard does — terminate-session
 //! as well as layout-change and new-session — because its job is to show which notification
@@ -33,17 +35,25 @@ use iterm::{Client, flatten, own_tty, resolve_own_session};
 /// Its own name, so the dashboard's authorization is never disturbed by a diagnostic run.
 const ADVISORY_NAME: &str = "oko-probe";
 
-/// The `//!` block's three lines. `var` is deliberately absent: it is OQ-5's spike, kept as
-/// a diagnostic, and not one of the things a person reaching for this binary wants.
+/// The `//!` block's lines. `var` is deliberately absent: it is OQ-5's spike, kept as a
+/// diagnostic, and not one of the things a person reaching for this binary wants. **`hx` and
+/// `screen-watch` are here, and in the unknown-command message, for the opposite reason**:
+/// they are how a later reader re-measures OQ-15 and OQ-16 against a Helix that has moved on.
 const USAGE: &str = "\
 oko-probe — Oko's headless diagnostic: what iTerm2 thinks, without a full-screen TUI in the
 way. When a dashboard row looks wrong, this is what says whether iTerm2 ever reported it.
 
 usage:
-  oko-probe                      identity, then the sessions of this window
-  oko-probe activate <session>   focus that session, its tab, and its window
-  oko-probe watch                print notifications as they arrive
-  oko-probe --help, -h           print this
+  oko-probe                       identity, then the sessions of this window
+  oko-probe activate <session>    focus that session, its tab, and its window
+  oko-probe watch                 print notifications as they arrive
+  oko-probe hx [<session>]        every Helix pane: its job names, its launch arguments, the
+                                  rows of its screen and the file the parser reads off them.
+                                  With a session, that session's screen rows alone, verbatim,
+                                  which is how a parser fixture is captured
+  oko-probe screen-watch <s>...   subscribe those sessions to screen updates and print one
+                                  line per update, with the gap since that session's last
+  oko-probe --help, -h            print this
 
 `watch` subscribes to more than the dashboard does, so it can tell you whether iTerm2 sent
 an event at all — which is the difference between Oko missing something and iTerm2 not
@@ -72,6 +82,8 @@ fn run() -> Result<()> {
             Ok(())
         }
         Some("watch") => watch(),
+        Some("hx") => hx(args.get(1).map(String::as_str)),
+        Some("screen-watch") => screen_watch(&args[1..]),
         Some("var") => var_spike(),
         // It never fell through to enumerating a window — `Some(other)` below already
         // `bail!`s — but it answered with no usage text and exit 1, under a prefix this
@@ -82,7 +94,8 @@ fn run() -> Result<()> {
         }
         Some(other) => {
             bail!(
-                "unknown command {other:?}; expected `activate <session-id>`, `watch` or `var`"
+                "unknown command {other:?}; expected `activate <session-id>`, `watch`, \
+                 `hx [<session-id>]`, `screen-watch <session-id>...` or `var`"
             )
         }
     }
@@ -246,7 +259,7 @@ fn watch() -> Result<()> {
         NotificationType::NotifyOnTerminateSession,
         NotificationType::NotifyOnLayoutChange,
     ] {
-        client.subscribe(notification, None)?;
+        client.subscribe(notification, None, None)?;
         println!("watching {notification:?}");
     }
 
@@ -279,5 +292,104 @@ fn watch() -> Result<()> {
         } else {
             println!("[{at:7.3}s] other notification: {n:?}");
         }
+    }
+}
+
+/// The four variables §2.17 measured, in the order it names them. `jobName` is the gate key
+/// (OQ-15); `deepestJob` is the one §2.2's sentence actually describes; `commandLine` and
+/// `terminalWindowName` are the two candidates §2.17 rejected, printed so a later reader can
+/// watch them stay at the launch arguments while the file changes.
+const HX_VARS: [&str; 4] = ["jobName", "deepestJob", "commandLine", "terminalWindowName"];
+
+/// What every Helix pane of this window has open — or, given a session, that session's screen
+/// rows alone.
+///
+/// The two forms are one command because they answer one question at two altitudes. The
+/// report is for a human asking why a row says what it says; the bare rows are how a parser
+/// fixture is captured, byte for byte, which a report can never be. The operand deliberately
+/// accepts **any** session, not only a Helix one: pointed at Oko's own pane it is the only
+/// oracle there is for what the dashboard actually drew, since the stream publishes no file.
+fn hx(session: Option<&str>) -> Result<()> {
+    let mut client = connect()?;
+
+    // Verbatim, nothing else, no header: a fixture is worth exactly its being unedited.
+    if let Some(session) = session {
+        for row in client.screen(session)? {
+            println!("{row}");
+        }
+        return Ok(());
+    }
+
+    let list = client.list_sessions()?;
+    let placed = flatten(&list);
+    let own = resolve_own_session(&mut client, &list)?;
+    let me = placed.iter().find(|p| p.session_id == own).expect("the join came from this list");
+
+    let mut found = 0;
+    for p in placed.iter().filter(|p| p.window_id == me.window_id) {
+        let vars = client.variables(&p.session_id, &HX_VARS)?;
+        let get = |name: &str| vars.get(name).cloned().unwrap_or_else(|| "-".into());
+        if get("jobName") != "hx" {
+            continue;
+        }
+        found += 1;
+
+        println!("── tab {} · {} ──────────────────────────────────", p.tab, p.session_id);
+        for name in HX_VARS {
+            println!("  {name:<20} {}", get(name));
+        }
+
+        let rows = client.screen(&p.session_id)?;
+        println!("  {:<20} {} row(s)", "screen", rows.len());
+        // `{:?}` rather than the bare text: it quotes and escapes, so trailing whitespace is
+        // visible and unambiguous, and it does not wrap a row in the very character the
+        // parser splits on.
+        for (i, row) in rows.iter().enumerate() {
+            println!("  {i:>3} {row:?}");
+        }
+        println!();
+        println!("  capture it:  oko-probe hx {} > <fixture>.txt", p.session_id);
+        println!();
+    }
+
+    if found == 0 {
+        println!("no session in this window has jobName `hx`.");
+    }
+    Ok(())
+}
+
+/// One line per screen update, per session, with the gap since that session's last.
+///
+/// The gap is the point rather than a nicety: OQ-16's window was chosen from the gaps inside
+/// a burst — 15–49 ms with a key held, 11–17 ms while a language server starts — so a command
+/// that printed timestamps alone could confirm the window but never re-derive it.
+fn screen_watch(sessions: &[String]) -> Result<()> {
+    if sessions.is_empty() {
+        bail!("usage: oko-probe screen-watch <session-id>...");
+    }
+    let mut client = connect()?;
+    for session in sessions {
+        client.watch_screen(session, true)?;
+        println!("watching screen updates on {session}");
+    }
+
+    println!();
+    println!("waiting — type in one of those panes, hold a key down, open a file. Ctrl-C to stop.");
+    let start = Instant::now();
+    let mut last: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
+    loop {
+        let Some(n) = client.next_notification()? else {
+            continue;
+        };
+        let Some(update) = n.screen_update_notification else {
+            continue;
+        };
+        let session = update.session.unwrap_or_default();
+        let now = Instant::now();
+        let gap = match last.insert(session.clone(), now) {
+            Some(previous) => format!("{:8.0} ms", (now - previous).as_secs_f64() * 1000.0),
+            None => "       — ms".to_string(),
+        };
+        println!("[{:7.3}s] {gap}  {session}", start.elapsed().as_secs_f64());
     }
 }
