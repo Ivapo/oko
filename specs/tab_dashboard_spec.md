@@ -5,7 +5,7 @@ note: >
   The iTerm2 dashboard tab — live per-tab directory, process and Claude Code status for
   every tab in the window, with Enter to jump to the selected one.
 status: accepted
-last_updated: 2026-09-02
+last_updated: 2026-09-17
 
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
@@ -46,6 +46,11 @@ phases:
   - name: "Phase 8 — the binaries are the product: no library surface in the published crate"
     reviewed: 2026-09-02
     shipped: 2026-09-02
+    cut: null
+    by: null
+  - name: "Phase 9 — what a Helix tab has open"
+    reviewed: 2026-09-17
+    shipped: null
     cut: null
     by: null
 
@@ -122,6 +127,14 @@ only with Phase 3.
   answering permission requests. Enter changes which tab is focused and nothing else.
 - **Not a general process monitor.** The plain-tab row exists to give context to the
   Claude rows, not to compete with `htop`.
+
+**CORRECTED 2026-09-17 (added with Phase 9, which narrows the third bullet).** Oko still
+*shows* no scrollback, no screen content and no output preview, and that half of the bullet
+stays true. What Phase 9 adds is *reading* one line of a Helix pane's screen — its status
+line — to derive one word, the open file's name, for a row whose job is `hx`. No text of the
+pane is displayed and no status is inferred from it. §2.17 is the argument; §2.7's decision
+for Claude rows is untouched. Left as written because it is still true of everything Oko
+draws, and a reader stopping here needs to know it no longer describes everything Oko reads.
 
 ## 2. Design
 
@@ -343,6 +356,14 @@ turns every Claude row into a wrong answer — and a status dashboard that is co
 wrong is worse than one that is absent, because it is trusted. Hooks deliver structured
 data on events Claude Code names and documents; the failure mode is a status that stops
 updating, which is visible, rather than one that lies.
+
+**CORRECTED 2026-09-17 (added with Phase 9).** This stays the decision for *status*, and for
+Claude rows nothing here moves. Phase 9 does read a screen — one status line of a Helix
+pane, for a file name — and §2.17 argues why neither of this section's grounds reaches it:
+there, a structured source existed and the screen would have been a worse copy of it; for
+Helix no structured source exists, and a file name is context rather than the call to action
+a status is. The sentence this section ends on is the one §2.17 is built to keep — a value
+that stops updating, not one that lies.
 
 ### 2.8 One row per session, not per tab (decision, recorded)
 
@@ -859,6 +880,151 @@ Nothing about the *repository* changes either — a contributor still reads one 
 place. What changes is what `cargo package` contains, which is the whole point and is why
 Phase 7 refused to bundle it (its gate would have measured two things at once).
 
+### 2.17 What a Helix tab has open (decision, recorded — added by Phase 9)
+
+A plain row reports a directory and a job name (§2.2), and for an editor the job name is the
+least informative word on the row: three tabs running Helix read `hx`, `hx`, `hx`. What tells
+them apart is the file each one has open, and that is the one thing a human glancing at the
+row wants from it. **This is §2.10's argument one column over** — `where` tells rows apart
+only when their directories differ, and several editors in one repository are exactly when
+they do not.
+
+**Nothing structured carries that file, and each candidate was measured rather than
+assumed** — 2026-09-17, Helix 25.07.1, iTerm2 API protocol 1.18, against a live
+`hx …/main.py` pane in a background tab:
+
+1. **A window title.** Helix sets none. Run in a pty for four seconds it wrote zero OSC 0, 1
+   or 2 sequences, and its editor configuration has no title key — not in the 25.07.1
+   binary's key list, not in the upstream `master` documentation. It is an open upstream
+   request (`helix-editor/helix#2436`; `#2887` asks the same thing and was closed as its
+   duplicate).
+2. **iTerm2's own variables.** `commandLine` read `hx /Users/…/main.py`, and
+   `terminalWindowName` read `hx '/Users/…/main.py'` — the shell's pre-exec title, not
+   Helix's. **Both are the launch arguments and stay them**: `hx .`, `:open`, the file
+   picker, `gf` and a buffer switch all change what is open and change neither. A row built
+   on them is right until the first file Helix opens by itself and confidently wrong for the
+   rest of the session — §2.7's failure, with no staleness rule to catch it.
+3. **An open file descriptor.** `lsof` on the Helix process showed one regular file,
+   `~/.cache/helix/helix.log`. Helix reads a file and closes it.
+4. **A hook.** Helix 25.07.1 has no event hooks and no plugin system, so there is nothing to
+   register an `oko-hook` equivalent with.
+
+What remains is the screen. A `GetBufferRequest` on that pane returned its 44 rows, and row 42
+read ` NOR   dev/labs/claude-certified-architect/main.py … 1 sel  10:1`.
+
+**Why this does not reopen §2.7.** §2.7 rejected reading the screen for *status*, on two
+grounds, and neither reaches this. There a structured source existed — hooks — and the screen
+would have been a worse copy of it; here nothing structured exists at all. And there the
+value read was the product's call to action: a wrong `waiting` sends a human to the wrong tab
+and is trusted because it is what the dashboard is for. A file name is context. **§2.7's
+principle is the one this design is built to keep rather than argue around**: the failure
+mode must be a value that stops updating, not one that lies. So a row gets a file only from a
+line matching Helix's status-line shape in full. Anything else — a customised status line, an
+overlay covering it, a screen mid-redraw — yields no new value, and a row that has never
+matched reads plain `hx`, exactly as it does today.
+
+**The line is found by where it starts, not by where the cursor is.** Helix draws one status
+line per view, and only the focused view's carries a mode name — for an unfocused view
+`render_mode` writes five blanks (helix-term, `ui/statusline.rs`, tag `25.07.1`). That alone
+does not identify it, because **a file's own text can look exactly like a status line, and in
+this repository one does**: this section quotes ` NOR   dev/…/main.py … 1 sel  10:1`, so
+editing this spec in Helix puts a counterfeit on the screen. What separates them is the left
+edge — Helix draws buffer text after a gutter, five elements wide by default, and a status
+line at its view's own first column. So: **a status line is a row where a space-padded `NOR`,
+`INS` or `SEL` begins at column 0, or in the cell after a split separator (`│`), with a
+`line:col` position later in that same piece of the row. Exactly one such piece on the screen
+is the focused view's status line; zero or several are no answer.** The file name is what
+follows the mode name and the spinner's reserved cell, up to the read-only or modification
+indicator or the first run of two spaces.
+
+**That rule was measured against a real Helix rather than reasoned about** — 2026-09-17, a
+scratch iTerm2 window driven through the API — and answers correctly in **12 states**: a
+single view with a counterfeit line above the cursor, then below it, then under it (3);
+a vertical split focused either side (2); three views; a path containing a space; a read-only
+file; `[scratch]`; `[+]` in insert mode; an open command line with its completion menu; an
+open file picker. **Two rules
+that look right on paper were measured and failed, and both are recorded so they are not
+re-proposed.** Anchoring on the terminal cursor — *the first status line below it* — takes the
+counterfeit whenever one sits between the cursor and the real line; its coordinates are a
+second trap, since `GetBufferResponse.cursor` is in buffer rows rather than screen rows and
+must be offset by `windowed_coord_range`'s start, which is what made the first implementation
+of that rule find nothing at all in every state. Anchoring on style — the status line's
+background — dies on **this machine's own theme**: under `everblush` every cell of the screen
+reports `#141b1e`, status line and buffer alike, while `default` and `base16_default` do
+differ. A rule that works under two themes and silently fails under the user's is worse than
+one that never had the anchor.
+
+**Indexing the row's text from the left is the same as counting screen columns here, and
+only here.** `LineContents.text` drops uninitialized cells and gives a combining mark or a
+wide character its own code points, so in general a column is `code_points_per_cell`'s job
+rather than a string offset. Helix paints every cell of every row it draws, so a Helix pane
+has no uninitialized cell for the text to close up — which is what makes a left-edge test
+safe on it — and everything the rule reads is single-width and non-combining (`NOR`, the
+`│` separator at U+2502, digits, spaces), sitting to the *left* of any path a wide character
+could appear in. A pane this is not true of is not a
+Helix pane, and it fails to match rather than matching wrongly.
+
+**What it costs, and why it is not the polling OQ-3 ruled out.** `NOTIFY_ON_SCREEN_UPDATE`
+takes a session id; Oko subscribes a session to it **only while that session's `jobName` is
+`hx`**, and cancels when the job changes. The notification carries the session id and nothing
+else, so it cannot say what changed, and a read is a `GetBufferRequest` round trip on the
+watcher thread — the thread that also serves `↵`. One read per notification would be one
+round trip per keystroke. So reads are shaped:
+
+- a session is **read once, after its screen has been quiet for 250 ms** (OQ-16);
+- **or 2 seconds after its first unread update**, whichever comes first, so a screen that
+  never goes quiet — a key held down, a language server starting — is still read;
+- **an idle Helix costs nothing**: no updates, so no reads.
+
+Nothing is requested on a timer. The window is measured on the watcher's own wake-ups, which
+come at every notification and at most `src/iterm/watch.rs:IDLE_TICK` apart when none
+arrives, so a window shorter than 100 ms could not be honoured. **250 ms is derived in
+OQ-16** and every number under it was measured: an idle Helix sends nothing at all, one
+keystroke is exactly one update, a held key delivers them 15–49 ms apart, and a language
+server starting bursts at 11–17 ms. The window sits above every one of those gaps and below
+the pause between two keystrokes, so ordinary typing costs one read per pause and a burst
+costs one read per 2 seconds. An update also does not imply the text changed — two arrived
+550 ms apart over screen text that hashed identically — which is one more reason a read per
+notification is the wrong shape. Background panes need no special case: the file changes
+only when a human acts in that pane, so the updates that matter arrive while it is in front,
+and reading a pane from the background works (measured above).
+
+**Only the dashboard reads.** `src/iterm/watch.rs:Watcher::connect` is shared by the
+dashboard, `--follow` and both one-shot commands (`src/main.rs:run`). `--follow` does not
+publish the file, so its reads would be pure cost, and a one-shot command would pay a
+subscription round trip per Helix pane to send one request and exit. Tracking is switched on
+by the dashboard's branch alone.
+
+**What the row shows: the file's base name, in the process cell** — `hx main.py`. The status
+line's path is relative to Helix's working directory, which need not be the row's `path`, so
+showing it would be a second `where` rooted somewhere else; the base name answers "which file"
+and nothing more. `[scratch]` is no file, and the row reads `hx`. The process column keeps its
+width, so a long name is cut the way `jobName` already is. A row carrying a Claude status is
+untouched — its cell reads `claude`, and its job is never `hx`.
+
+**Three things this deliberately does not do.**
+
+- **Publish the file on `--follow`.** A field is `schema: 2` and a phase of its own, by
+  OQ-12's reasoning, and no consumer has asked. `src/follow.rs:row_json` does not change, so a
+  file switch builds a snapshot whose serialized line matches the last one sent, and the
+  stream suppresses it.
+- **Generalise to editors.** It is a job named exactly `hx`. An editor that sets a title —
+  Neovim's `title` option — would offer a structured source, which is a different decision,
+  and nobody has asked for one.
+- **Show `[+]`**, though the same line carries it. The ask was *which file*; an
+  unsaved-changes marker is a second signal with its own questions.
+
+**The cost, stated.** This rests on Helix's default status line. A user who moves or removes
+its mode or position elements, or renames the modes, gets `hx` and no file — absent, not
+wrong. **`[editor.statusline]` is untouched in `~/.config/helix/config.toml` on this
+machine**, which is the part that matters; that file does set a theme, soft wrap and
+keymaps, and none of those reach this. Turning gutters off costs the same way rather than
+worse: buffer text then starts at column 0 too, so a counterfeit line becomes a second
+candidate and the rule answers nothing while it is on screen. A Helix release that reshapes
+the line lands the same way, and that is §2.7's version-less-UI risk, taken here because its
+failure is absence and because the parser's fixtures, captured from a real Helix, are where a
+reshaped line shows up first.
+
 ## 3. Open questions
 
 - **OQ-1 — How does a Rust binary reach the iTerm2 API?** **RESOLVED 2026-08-14 by Phase
@@ -1366,6 +1532,73 @@ Phase 7 refused to bundle it (its gate would have measured two things at once).
   release and Phase 7 adds three flags and a rename. **This question is cheap to get wrong in
   one direction only** — a version can be bumped and cannot be un-published — so the phase's
   gate records what the header says rather than assuming it.
+- **OQ-15 — Does `jobName` stay `hx` for the life of a Helix session?** **RESOLVED
+  2026-09-17, during Phase 9's review round: yes — it is set once and never moves.** Measured
+  with `NOTIFY_ON_VARIABLE_CHANGE` on `jobName` over a Helix driven through the API in a
+  scratch window: **one event, `"hx"`, at 135 ms, and none after it** — not when
+  rust-analyzer started and indexed this repo, not on `:lsp-restart`, not on
+  `:run-shell-command sleep 3`, which puts a real child in the foreground. Two live panes
+  seen independently in the same round agree: both read `jobName` `hx`, one over
+  `deepestJob` `node` (pyright), the other over `deepestJob` `rust-analyzer-pr`. **So the
+  gate key is sound, and §2.2 is what the measurement contradicts** — that section says
+  `jobName` is the *deepest* foreground job, which would have made these panes read `node`
+  and `rust-analyzer-pr`; `deepestJob` is the variable that does that, and `jobName` hides
+  helper subprocesses, as iTerm2's own documentation says. §2.2's sentence gets a dated note
+  at this phase's close-out. **OQ-2 is untouched**: it rules `jobName` out as an *identity*
+  test for Claude rows, which nothing here revisits — a Helix row is gated on the job name
+  precisely because no file, hook or variable reports Helix's identity at all (§2.17).
+  *(needs measurement — blocked Phase 9)* Phase 9 subscribes and reads only while it does, so
+  a job that flips to a
+  child turns the file off and back on, and a session that never reads `hx` never gets one.
+  **§2.2 predicts it flips**: it says `jobName` is the *deepest* foreground job, and Helix
+  starts its language servers as children. **One measurement says otherwise**: a Helix pane
+  running `pyright-langserver` read `jobName` `hx` and `deepestJob` `node` (2026-09-17), which
+  fits iTerm2's own description of `jobName` as hiding helper subprocesses and does not fit
+  §2.2's sentence. One language server is not the claim. Measure with `oko-probe watch` over a
+  Helix session on this repo — rust-analyzer starting, running and restarting (`:lsp-restart`)
+  — plus a `:sh` command, counting `jobName` events. A brief flip during `:sh` is tolerable,
+  since the row returns within one read. **If `hx` holds**, §2.2 gets a dated note at Phase 9's
+  close-out rather than now, because the note is only true once measured. **If a language
+  server displaces it**, gating on `jobName` is the wrong key and Phase 9 is not plannable as
+  written.
+- **OQ-16 — How long is the quiet window, and does the 2-second ceiling fire in practice?**
+  **RESOLVED 2026-09-17, during Phase 9's review round: 250 ms, and the ceiling fires only
+  while a key is held or a language server is starting.** Measured against a Helix driven
+  through the API, counting `NOTIFY_ON_SCREEN_UPDATE` per session:
+
+  | what | updates | gaps |
+  |---|---|---|
+  | idle, nobody typing | **0** in 5 s | — |
+  | five single keys, 1.5 s apart | 5 | one update per keystroke, exactly |
+  | typing, ~140 ms apart | 30 | 109–142 ms |
+  | a key held, ~47 ms repeat | 214 in 10 s | 15–49 ms, every one under 100 ms |
+  | 3 s after release | **0** | — |
+  | rust-analyzer starting, 60 s | 70 | p50 **17 ms**, p90 109 ms, max 36.9 s |
+
+  **One bound is hard and the rest are judgement.** The window must clear the widest gap
+  inside a burst — 49 ms with a key held, 109 ms at the language server's ninetieth percentile
+  — or a burst is read while it is still running and read again, which is the cost this
+  question exists to bound; and it cannot go under `IDLE_TICK`'s 100 ms, which the watcher
+  could not honour. 250 ms takes those with margin and spends a quarter second of lag on a
+  value a human reads after switching tabs. **It is deliberately above the ~140 ms between two
+  keystrokes**, which means sustained typing never goes quiet and is served by the 2 s ceiling
+  instead — about eight reads a minute while someone types without pause, against one per
+  pause if the window sat under the typing cadence. Human pauses longer than 250 ms still read
+  at the pause, which is most of them. **One keystroke is one update**, so nothing is ever read half-drawn by a
+  redraw of its own — the hazard this question was raised about does not exist. The ceiling
+  keeps its 2 s: the language-server burst is the only measured thing that holds the screen
+  busy without a 250 ms pause, it lasts about a second, and it ends in silence rather than
+  running on. *(needs measurement, then a design call — blocked Phase 9)* Measured so far: updates arrive
+  per session, at gaps from 92 ms to 2.6 s from a pane edited by hand, and one update need not
+  change the text (§2.17). **No window length is chosen in this document; the measurement
+  chooses it.** Measure with `oko-probe screen-watch <session>…`, a timestamp per update:
+  (a) how many updates one keystroke, one `:open` and one picker selection each produce, and
+  how far apart — **the window must exceed the gap inside one redraw**, or a file switch is
+  read half-drawn; (b) the gaps in ordinary typing, which decide how many reads a paragraph
+  costs; (c) whether a held key keeps every gap below the window, which Phase 9's check 10
+  relies on; (d) whether rust-analyzer starting on this repo keeps the screen updating with no
+  pause as long as the window — the case the ceiling exists for. The floor is `IDLE_TICK`'s
+  100 ms. The ceiling stays 2 s unless (d) gives a reason to move it.
 
 ## 4. Implementation phases
 
@@ -2500,3 +2733,214 @@ the packaged manifest rather than out of `cargo build`.*
   review-record commit first, then the restructure, then the documentation; the PR leaves
   draft when the round converges. `cargo publish` is not in this plan either, and is now
   unblocked by it.
+
+### Phase 9 — what a Helix tab has open
+
+*Produces the observable: **yes**, and it changes the observable's own sentence. A plain tab
+has shown "working directory and foreground process" since Phase 2; for a tab running Helix
+the foreground process is the word `hx` on every such row, and the file open in each — the
+thing that tells them apart — has never been on screen. After this phase it is, in the
+process cell (§2.17). **The risk this phase carries is the one §2.7 was written about**: a
+value read off a user interface can be confidently wrong. So the gate spends more checks on
+absence than on presence — a status line it cannot match, an overlay covering one, a split
+whose bottom line belongs to the wrong view — because a build that shows the right file in
+the easy case and a wrong one in those is worse than the `hx` it replaces.*
+
+- **Scope.**
+  - ~~Settle OQ-15 and OQ-16 during this phase's review round, not during implementation.~~
+    Both settled 2026-09-17, in that round, against a Helix driven through the API in a
+    scratch window: `jobName` is set once to `hx` and never moves (OQ-15), and the window is
+    **250 ms** with the ceiling at 2 s (OQ-16). The round adds two `src/bin/oko-probe.rs`
+    subcommands, as OQ-5's round added `var_spike`, and both stay as diagnostics: **`hx`**,
+    which prints every Helix session's `jobName`, `deepestJob`, `commandLine` and
+    `terminalWindowName`, the rows of its screen, and what the parser makes of them; and
+    **`screen-watch <session>…`**, which subscribes those sessions to
+    `NOTIFY_ON_SCREEN_UPDATE` and prints one timestamp per update. Both appear in the probe's
+    usage text **and** its unknown-command message — unlike `var`, which
+    `src/bin/oko-probe.rs:USAGE` deliberately omits as a one-off spike. These two are not
+    one-offs: they are how a later reader re-measures OQ-15 and OQ-16 against a Helix that
+    has moved on.
+  - **The client** (`src/iterm/client.rs`). `subscribe` sends `session: None` for every
+    notification type today, and screen updates need a session: it gains a session argument,
+    and a counterpart that cancels (`subscribe: Some(false)`). And a read, `screen`, sending
+    `GetBufferRequest` with `screen_contents_only` and returning **the rows' text and nothing
+    else**. **`SESSION_NOT_FOUND` is an ordinary answer, not an error** — a pane closed
+    between its last update and the read — and returns no rows. **The cursor is deliberately
+    not returned**: §2.17's first rule used it and was measured wrong twice over, once on the
+    rule and once on the coordinates — `GetBufferResponse.cursor` counts buffer rows, not
+    screen rows, and needs `windowed_coord_range`'s start subtracted. Handing the parser a
+    field it must not use is how that comes back.
+  - **The parser** (`src/iterm/helix.rs`, new). A pure function from the rows to one of three
+    answers: **a file** (the base name), **no file** (`[scratch]`), or **no status line
+    found**. The third is not the second, and conflating them is the bug this split exists to
+    prevent: an overlay would clear a correct name. The rule is §2.17's — split each row on
+    the separator `│`, take a piece that *starts* with a space-padded `NOR`, `INS` or `SEL`
+    and carries a `line:col` later in it, and require **exactly one** such piece on the whole
+    screen; the path is what follows the mode and the spinner cell, up to the read-only or
+    modification indicator or the first run of two spaces. **The uniqueness requirement is
+    the counterfeit defence** (§2.17), and it is why the answer for two candidates is nothing
+    rather than the first. **It is a submodule of `iterm` rather than a root module, and that is Phase
+    8's table talking**: declared at a binary's root it would have to be added to `oko` and
+    `oko-probe` both, and inside `iterm` it rides the declaration they already have and the
+    `#![allow(dead_code, unused_imports)]` at the head of `src/iterm/mod.rs`. Its unit tests
+    are fixtures captured with `oko-probe hx` from a real Helix 25.07.1, not hand-typed rows —
+    a hand-typed fixture tests the parser against its author's memory of the screen. **The 12
+    states §2.17 measured are the fixture list**, and the counterfeit ones are the point of it.
+  - **The watcher** (`src/iterm/watch.rs`). `Row` gains `file`, held on the watcher's rows
+    like `path` and patched by reads, so `emit_if_changed`'s one comparison sees it and a
+    changed file is an emission. **Tracking is off until the dashboard turns it on**: a
+    method `src/main.rs:run` calls after `Watcher::connect` in the dashboard branch only
+    (§2.17, "only the dashboard reads"). While on:
+    - a row whose `jobName` becomes `hx` — in `apply`, or seen first in `rescan` — is
+      subscribed to screen updates and **marked due for a read at once**, because Helix drew
+      its status line before any subscription existed and no update may ever follow;
+    - a screen update marks its session with the instant of its first unread update and of
+      its latest one;
+    - **on every pass of `run`, not only on the passes that carried a notification**, it
+      reads each session whose latest update is 250 ms old or whose first unread update is
+      2 seconds old, then clears that session's marks. **The distinction is the whole
+      mechanism**: the read that matters is the one after the updates *stop*, and a pass
+      gated on a notification arriving is a pass that never happens once they do. A **file**
+      answer sets `file`, a **no file** answer clears it, and **no status line found** leaves
+      it alone;
+    - a row whose `jobName` stops being `hx` is unsubscribed and its `file` cleared in the same
+      pass, so a quit Helix never leaves its last file on a shell row;
+    - **`rescan` carries `file` forward** for a session it already knows, exactly as it
+      carries `process`, `path` and `stored_name` today. A layout change rebuilds every row,
+      and a `file` dropped there would blank every Helix row each time any tab in the window
+      opened, closed or moved — and would be repaired within 250 ms only if that pane
+      happened to redraw, so the visible defect is a name that comes and goes. Check 7 opens
+      a pane for this reason.
+    **A failed read is not fatal**, unlike a failed `apply`, which ends the watcher: it
+    leaves `file` as it was, and a broken connection surfaces at the next
+    `next_notification` anyway. A session that leaves the window keeps its screen
+    subscription, for the reason it keeps its variable ones (`rescan`'s `subscribed`): its
+    updates arrive, match no row and cost no read.
+  - **The table** (`src/ui.rs:render_row`). The process cell reads `hx <file>` when the row
+    has no status, its process is `hx` and `file` is set; otherwise exactly what it reads
+    today. Column widths do not change.
+  - **A read log, for checks 8–10** (`src/iterm/watch.rs`). The cost property — an idle Helix
+    reads nothing, a busy one reads a bounded number of times — is invisible on screen, which
+    is Phase 4's check 9 problem again and gets Phase 4's answer: under `OKO_DEBUG_READS`,
+    each read appends one timestamp to `~/.oko/reads.log`. **No session id and no file name**:
+    `wc -l` is all the gate reads, and a log of file names is a second record of what someone
+    was editing that nothing needs.
+  - **Not in scope, each a decision rather than an omission:** no stream field and no schema
+    change (§2.17); no `[+]`; no editor but `hx`; no support for a customised status line
+    beyond reading `hx` for it; no column-width change; nothing for Helix run over `ssh`, whose
+    job is `ssh`.
+- **Exit gate.** **One window**: Oko started with `OKO_DEBUG_READS=1`; tab A, a `zsh` in
+  `~/dev/main/oko`; and a second pane in Oko's own tab running `oko --follow > /tmp/oko-9.jsonl`.
+  Prepare `seq 1 5000 > /tmp/oko-9.txt` — **a `.txt` file, so no language server starts**,
+  which is what lets checks 8 and 10 count reads that come from the gate and not from an
+  indexer — plus check 4's and check 5's three files: `/tmp/oko-9-decoy.txt`, whose first line
+  is `printf ' NOR   fake.rs   1 sel  12:3\n'`; `/tmp/oko-9-nogutter.toml`, holding
+  `[editor]` and `gutters = []`; and `/tmp/oko-9.toml`, holding `[editor.statusline]`,
+  `left = ["file-name"]` and `right = []`. Oko is not restarted.
+  1. **A Helix row names its file.** In A, `hx src/main.rs`: within 2 seconds A's process
+     cell reads `hx main.rs`.
+  2. **It follows Helix, not the launch.** In A, `:open src/ui.rs` → `hx ui.rs`; `space f`
+     and pick `README.md` → `hx README.md`; `:buffer-previous` → `hx ui.rs`. Each within 2
+     seconds. **This is the check an implementation on `commandLine` fails** — it reads
+     `main.rs` throughout. The picker leg passes whether or not the picker covers the status
+     line: measured, it did not, so the name may change while the picker is still open.
+  3. **The focused view, not the bottom line.** `:vsplit src/follow.rs` → `hx follow.rs`;
+     `ctrl-w w` → `hx ui.rs`; `ctrl-w w` → `hx follow.rs`. Then `ctrl-w o` and
+     `:hsplit src/main.rs` → `hx main.rs`, focus being in the new view; `ctrl-w w` →
+     `hx follow.rs`. **One of those two views is the top one, and whichever it is, one leg
+     has focus in it** — the leg an implementation reading the last status line on screen
+     fails, after passing checks 1 and 2. Then `ctrl-w o`. (**`ctrl-w o`, not `:only`**: the
+     round drove `:only` at a real Helix 25.07.1 and the layout did not change.)
+  4. **A counterfeit status line in the file does not become the answer.** In A,
+     `hx specs/tab_dashboard_spec.md`, then `/NOR   dev` and `Enter` to put §2.17's quoted
+     line — ` NOR   dev/…/main.py … 1 sel  10:1`, a real status line reproduced inside this
+     document — on screen. Repeat with it above the cursor, below it, and on the cursor's own
+     line. The cell **never reads `hx main.py`**; it reads this file, which the 17-cell column
+     cuts to **`hx tab_dashboard_`** — named because a second person otherwise looks for a
+     string no correct build can draw. **This is the check that fails both rules §2.17
+     rejected**, and it is built out of this repository rather than a contrived file because
+     the hazard was found in it. **It does not reach the uniqueness branch**, and that is
+     stated rather than implied: this document's counterfeits sit mid-sentence, so with the
+     gutter in front of them they never begin a row piece. The next check is the one that
+     reaches it.
+     Then `:qa!`, and `hx -c /tmp/oko-9-nogutter.toml /tmp/oko-9-decoy.txt` — the gutterless
+     config and the crafted file from the preamble. With no gutter in front of it that file's
+     first line *does* begin a row piece, so the screen carries two candidates and **the cell
+     reads `hx`**: the uniqueness rule answering nothing rather than `hx fake.rs`. `:qa!`.
+  5. **Absence, not a guess.** In A, `hx /tmp/oko-9.txt`, then `:new` → the cell reads `hx`
+     for a scratch buffer. `:qa!`, then `hx -c /tmp/oko-9.toml /tmp/oko-9.txt` — the status
+     line config from the preamble, which leaves Helix **no mode and no position**: the cell
+     reads `hx`, never `oko-9.txt` or any other word. This is §2.7's condition as a check: a
+     status line Oko cannot match must produce nothing.
+  6. **An overlay keeps the last value.** `:qa!`, then `hx /tmp/oko-9.txt` → `hx oko-9.txt`.
+     Type `:` and hold the completion menu open for 5 seconds: the cell still reads
+     `hx oko-9.txt`, not `hx`. **Whether the menu covers the status line depends on the
+     window's height** — it did in one measured terminal and did not in another — so this
+     check passes either way and exists for the case where it does. `Esc`.
+  7. **The name survives a layout change.** With `hx /tmp/oko-9.txt` still open in A, **open a
+     new tab in the window and close it again**, touching nothing in A. A's cell reads
+     `hx oko-9.txt` throughout — no blank frame — while `rescan` rebuilds every row twice.
+     This is the one check that fails an implementation which drops `file` on a layout change.
+     **Splitting A's own tab is not the check and would hide the defect**: a split resizes the
+     Helix pane, Helix redraws the whole screen, and the read that follows repopulates `file`
+     within 250 ms — repairing exactly the build this check exists to catch. A new tab resizes
+     nothing.
+  8. **An idle Helix reads nothing.** Wait 3 seconds, so check 7's last read has landed;
+     `wc -l ~/.oko/reads.log`; touch nothing for 60 seconds;
+     `wc -l` again: **unchanged.**
+  9. **Leaving Helix clears the file and stops the reads.** `:q`: within 2 seconds A reads
+     `zsh` with no file. `wc -l ~/.oko/reads.log`; type `ls` and `Enter` ten times in A;
+     `wc -l`: **unchanged**. A shell's screen updates must cost no read. (Whether the
+     *subscription* was cancelled is not separately gated: one left behind costs
+     notifications that match no Helix row, not reads, and nothing on screen or in the log
+     can see it. Stated so nobody believes this check covers it.)
+  10. **Reads are bounded, and the ceiling fires.** `hx /tmp/oko-9.txt`, wait for the name,
+      `wc -l`; **hold `j` for 10 seconds** and release; wait 3 seconds; `wc -l`. The log grew
+      by **at least 4 and at most 7** — five ceiling reads in ten seconds, one either way for
+      phase, one after release. **Both bounds are the check**: a pure quiet-window reader
+      gives 1 and fails the lower, a read per notification gives hundreds and fails the upper.
+      **First confirm the key repeat is faster than the window**: `defaults read -g KeyRepeat`
+      unset, or ≤ 12 — the unit is 15 ms, so 12 is 180 ms against the 250 ms window (OQ-16
+      measured 15–49 ms gaps at a 47 ms repeat). A slower repeat lets the screen go quiet
+      between repeats, and the count becomes one read per repeat against a correct build.
+  11. **The stream does not move.** `wc -l /tmp/oko-9.jsonl` before check 2 and after it:
+      **unchanged** across its three file switches — `row_json` publishes no file, so each
+      switch is a suppressed line (§2.17). Scoped to check 2 because starting and quitting
+      Helix changes `job`, which the stream does publish. Opening a `.rs` file in check 2 does
+      **not**, which is OQ-15's measurement and the reason this check can live beside one.
+  12. **The parser is pinned, and it landed where Phase 8's table says.** `cargo test` runs
+      the fixtures, captured with `oko-probe hx` — **the 12 states §2.17 lists**, in its
+      wording. Plus two the round did not measure and the rule claims: check 4's second leg,
+      the gutterless screen carrying a counterfeit that begins a row piece (two candidates →
+      no status line found), and an empty screen. **The gutterless fixture needs the crafted
+      file to be captured, not this document** — a counterfeit that does not begin a row piece
+      answers "one candidate", and a fixture that passes for that reason pins nothing. **Per binary**: `oko` and
+      `oko-probe` each rise by the parser's test count and
+      **`oko-hook` stays at 17** — a higher `oko-hook` means `helix` was declared somewhere
+      that binary reaches. `cargo clippy --all-targets -- -D warnings` is clean and
+      `spec-lint --strict` passes.
+- **Close-out.** **Reconciliation.** **A new `rules/helix-file.md`** — sources
+  `src/iterm/helix.rs`, `src/iterm/watch.rs`, `src/iterm/client.rs`; covers the gate on
+  `jobName`, the screen subscription, the window and the ceiling, the left-edge anchor and its
+  uniqueness rule, the three
+  answers and what each does to a row, that only the dashboard reads, and what the stream does
+  not carry. **A new rule rather than raised caps**: `rules/dashboard-ui.md` sits at 114/118 and
+  `rules/iterm-api.md` at 113/115, and this is a subsystem with its own sources rather than a
+  paragraph of either. Each of those two gains one line pointing at it — the process cell for
+  `hx`, and `NOTIFY_ON_SCREEN_UPDATE` with `GetBufferRequest` among the subscriptions and
+  operations — **and cuts deliberately and says which if that line does not fit.**
+  `rules/INDEX.md` is regenerated. `rules/follow-stream.md` is read and the expected answer is
+  "no change", which check 9 is what makes falsifiable. `README.md` gains the Helix row and the
+  default-status-line condition, in those words, because a user with a customised line will
+  otherwise file a bug. **The `CLAUDE.md` observable line changes**: "working directory and
+  foreground process for a plain tab" gains "and the file open in a Helix tab". The spec's
+  `note` gains the same, which regenerates `specs/INDEX.md`. §1's sketch is re-read: its plain
+  row is `nvim`, which this phase does not touch, so the expected answer is no change. **§2.2
+  gets its dated note only if OQ-15 measured `hx` holding** (see there). OQ-15 and OQ-16 are
+  resolved in the review round, so the close-out step is to confirm they still describe what
+  shipped. Commit plan: **on `main`, no branch and no PR** — the spec and review-record commit
+  first, then the probe subcommands, then client, parser and watcher, then the table, then
+  rules, README and `CLAUDE.md`. That is a departure from Phases 7 and 8, which each took a
+  branch and a PR, and it is the author's call rather than an oversight: this phase's review
+  converged before any code exists, so the PR would have no reviewer left to serve. **One
+  push, as §3 requires** — the unit is the push, not the branch.
