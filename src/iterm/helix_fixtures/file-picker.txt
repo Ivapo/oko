@@ -1,0 +1,40 @@
+     1  x1                                                                                                              
+     2  2                                                                                                               
+     3┌────────────────────────────────────────────────────┐┌────────────────────────────────────────────────────┐      
+     4│                                              40/40 ││ # Oko                                              │      
+     5│────────────────────────────────────────────────────││                                                    │      
+     6│ > CLAUDE.md                                        ││ "The eye" — a dashboard tab inside iTerm2 that     │      
+     7│   Cargo.lock                                       ││ ↪ shows what every other tab in the window         │      
+     8│   Cargo.toml                                       ││ is doing.                                          │      
+     9│   LICENSE                                          ││                                                    │      
+    10│   README.md                                        ││ ## Development flow                                │      
+    11│   build.rs                                         ││                                                    │      
+    12│   proto/NOTICE.md                                  ││ This repo is developed spec-driven. Two artifacts, │      
+    13│   proto/api.proto                                  ││ ↪  one job each:                                   │      
+    14│   rules/INDEX.md                                   ││                                                    │      
+    15│   rules/_template.md                               ││ - **`specs/<name>_spec.md`** — why we decided      │      
+    16│   rules/claude-status.md                           ││ ↪ something, and the plan. Append-only once        │      
+    17│   rules/dashboard-ui.md                            ││   `accepted`; it does not track the code and may   │      
+    18│   rules/follow-stream.md                           ││   ↪ drift from it.                                 │      
+    19│   rules/iterm-api.md                               ││ - **`rules/<subsystem>.md`** — what is true right  │      
+    20│   rules/session-commands.md                        ││ ↪ now. It **does** track the code, and is          │      
+    21│   specs/INDEX.md                                   ││   corrected against its own sources rather than    │      
+    22│   specs/_template.md                               ││   ↪ rewritten from scratch — freely, with no       │      
+    23│   specs/reviews/oko-001.md                         ││   dated note. Each one declares its own `sources`, │      
+    24│   specs/tab_dashboard_spec.md                      ││   ↪  `covers` and `max_lines`.                     │      
+    25│   src/bin/oko-hook.rs                              ││                                                    │      
+    26│   src/bin/oko-probe.rs                             ││ The methodology is `/Users/ivapo/dev/main/spec-    │      
+    27│   src/follow.rs                                    ││ ↪ driven-dev/spec-authoring.md` — the              │      
+    28│   src/iterm/client.rs                              ││ frontmatter schema, the phase gate, the review     │      
+    29│   src/iterm/helix.rs                               ││ ↪ loop; section references below (`§3`,            │      
+    30│   src/iterm/helix_fixtures/command-line-menu.txt   ││ `§6.1`) resolve against that file. Spec ids are `  │      
+    31│   src/iterm/helix_fixtures/counterfeit-above.txt   ││ ↪ oko-NNN`, allocated as                           │      
+    32│   src/iterm/helix_fixtures/counterfeit-below.txt   ││ `max(existing) + 1` and never reused.              │      
+    33│   src/iterm/helix_fixtures/counterfeit-under.txt   ││                                                    │      
+    34│   src/iterm/helix_fixtures/insert-modified.txt     ││ **The observable this project produces is: a live  │      
+    35│   src/iterm/helix_fixtures/path-with-space.txt     ││ ↪ dashboard tab showing what every other           │      
+    36└────────────────────────────────────────────────────┘└────────────────────────────────────────────────────┘      
+    37  37                                                                                                              
+    38  38                                                                                                              
+ NOR   /tmp/oko-9.txt [+]                                                                                    1 sel  1:2 
+                                                                                                                        

@@ -1,0 +1,40 @@
+    1  ##                                                                                                               
+    2  # Host Database                                                                                                  
+    3  #                                                                                                                
+    4  # localhost is used to configure the loopback interface                                                          
+    5  # when the system is booting.  Do not change this entry.                                                         
+    6  ##                                                                                                               
+    7  127.0.0.1   localhost                                                                                            
+    8  255.255.255.255 broadcasthost                                                                                    
+    9  ::1             localhost                                                                                        
+    ~                                                                                                                   
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+ NOR   /etc/hosts  [readonly]                                                                                1 sel  1:1 
+Loaded 1 file.                                                                                                          

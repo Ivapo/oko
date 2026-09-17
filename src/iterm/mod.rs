@@ -23,6 +23,7 @@ pub mod api {
 }
 
 mod client;
+pub mod helix;
 mod watch;
 
 pub use client::{Client, socket_path};

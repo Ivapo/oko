@@ -1,0 +1,40 @@
+    1  //! Oko — the dashboard tab. Phase 2 of `specs/      │    1  //! `--follow`: the same rows, as a stream another  
+       ↪ tab_dashboard_spec.md`.                            │       ↪ program can draw.                                 
+    2  //!                                                  │    2  //!                                                 
+    3  //! Three threads. One owns the iTerm2 socket and    │    3  //! Newline-delimited JSON on stdout — a header     
+       ↪ every conversation with it; one blocks on          │       ↪ line naming the schema, then one line per         
+    4  //! terminal input; the main thread draws and does   │    4  //! snapshot. Nothing here touches the terminal: no 
+       ↪ nothing else. They meet on one channel,            │       ↪ alternate screen, no key handling, no             
+    5  //! so a keystroke and a notification arrive at the  │    5  //! footer.                                         
+       ↪ table the same way.                                │    6  //!                                                 
+    6  //!                                                  │    7  //! **A stream rather than a library** (§2.13). The 
+    7  //! **`--follow` is a second entry point**, taken    │       ↪ first consumer is panex-tui, and both             
+       ↪ before any of that: the same rows as a JSON        │    8  //! programs are Rust, so it could depend on this   
+    8  //! stream for another program to draw, with no      │       ↪ crate and call [`Watcher::connect`] itself.       
+       ↪ terminal involved at all (`src/follow.rs`).        │    9  //! That is rejected because the feature must       
+    9  //!                                                  │       ↪ degrade to *nothing*: a person running panex-tui  
+   10  //! The API must be enabled once per machine — see ` │   10  //! without Oko installed should see no card view   
+       ↪ README.md` and `rules/iterm-api.md`.               │       ↪ and no error, and a compile-time dependency       
+   11                                                       │   11  //! is always present, so there would be no absence 
+   12  // The shared modules, declared here rather than     │       ↪ to degrade to. The whole contract is two          
+       ↪ reached through a library. There is no             │   12  //! facts — that a binary named `oko` may be on `   
+   13  // lib target: publishing one would put an internal  │       ↪ PATH`, and the shape of the lines it writes.      
+       ↪ seam on crates.io as a public API and              │   13  //!                                                 
+   14  // hand the vendored schema's GPL-2.0 obligation to  │   14  //! The emission point is the one that already      
+       ↪ anyone writing one dependency line                 │       ↪ exists. `src/iterm/watch.rs:emit_if_changed` is   
+   15  // (§2.16, OQ-13). `src/ui.rs` and `src/follow.rs`   │   15  //! the single place a change is published, and     
+       ↪ use both of them.                                  │       ↪ this mode supplies a different closure to         
+   16  mod iterm;                                           │   16  //! `src/iterm/watch.rs:Watcher::run` rather than   
+   17  mod status;                                          │       ↪ adding a second view-building path. Nothing       
+   18                                                       │   17  //! here modifies that function, `src/ui.rs`, or    
+   19  mod follow;                                          │       ↪ the dashboard's path through `src/main.rs`.       
+   20  mod ui;                                              │   18                                                      
+   21                                                       │   19  use std::io::{self, Write};                         
+   22  use std::sync::mpsc;                                 │   20  use std::sync::mpsc;                                
+   23  use std::thread;                                     │   21  use std::thread;                                    
+   24                                                       │   22  use std::time::Duration;                            
+   25  use anyhow::{Context, Result};                       │   23                                                      
+   26  use ratatui::crossterm::event;                       │   24  use anyhow::{Result, bail};                         
+   27                                                       │   25  use serde_json::json;                               
+ NOR   src/main.rs                               1 sel  1:1 │       src/follow.rs                            1 sel  1:1 
+                                                                                                                        

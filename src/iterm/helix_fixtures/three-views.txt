@@ -1,0 +1,40 @@
+    1  //! Oko — the dashboard tab. Phase 2 of `specs/      │    1  //! `--follow`: the same rows, as a stream another  
+       ↪ tab_dashboard_spec.md`.                            │       ↪ program can draw.                                 
+    2  //!                                                  │    2  //!                                                 
+    3  //! Three threads. One owns the iTerm2 socket and    │    3  //! Newline-delimited JSON on stdout — a header     
+       ↪ every conversation with it; one blocks on          │       ↪ line naming the schema, then one line per         
+    4  //! terminal input; the main thread draws and does   │    4  //! snapshot. Nothing here touches the terminal: no 
+       ↪ nothing else. They meet on one channel,            │       ↪ alternate screen, no key handling, no             
+    5  //! so a keystroke and a notification arrive at the  │    5  //! footer.                                         
+       ↪ table the same way.                                │    6  //!                                                 
+    6  //!                                                  │    7  //! **A stream rather than a library** (§2.13). The 
+    7  //! **`--follow` is a second entry point**, taken    │       ↪ first consumer is panex-tui, and both             
+       ↪ before any of that: the same rows as a JSON        │    8  //! programs are Rust, so it could depend on this   
+    8  //! stream for another program to draw, with no      │       ↪ crate and call [`Watcher::connect`] itself.       
+       ↪ terminal involved at all (`src/follow.rs`).        │    9  //! That is rejected because the feature must       
+    9  //!                                                  │       ↪ degrade to *nothing*: a person running panex-tui  
+   10  //! The API must be enabled once per machine — see ` │   10  //! without Oko installed should see no card view   
+       ↪ README.md` and `rules/iterm-api.md`.               │       ↪ and no error, and a compile-time dependency       
+   11                                                       │   11  //! is always present, so there would be no absence 
+       src/main.rs                               1 sel  1:1 │       ↪ to degrade to. The whole contract is two          
+    1  //! The dashboard: a table of the window's sessions, │   12  //! facts — that a binary named `oko` may be on `   
+       ↪ and the two keys that matter.                      │       ↪ PATH`, and the shape of the lines it writes.      
+    2  //!                                                  │   13  //!                                                 
+    3  //! ```text                                          │   14  //! The emission point is the one that already      
+    4  //!  Oko — window 0                                  │       ↪ exists. `src/iterm/watch.rs:emit_if_changed` is   
+       ↪           5 rows                                   │   15  //! the single place a change is published, and     
+    5  //!  ────────────────────────────────────────────────│       ↪ this mode supplies a different closure to         
+       ↪ ────────────────                                   │   16  //! `src/iterm/watch.rs:Watcher::run` rather than   
+    6  //!    tab  name             process   status        │       ↪ adding a second view-building path. Nothing       
+       ↪   where                                            │   17  //! here modifies that function, `src/ui.rs`, or    
+    7  //!  ▸ 1    api work         claude    ● waiting >   │       ↪ the dashboard's path through `src/main.rs`.       
+       ↪ 10m  ~/dev/main/oko                                │   18                                                      
+    8  //!    2    spec-driven-dev  claude    ◐ working     │   19  use std::io::{self, Write};                         
+       ↪   ~/dev/main/spec-driven-dev                       │   20  use std::sync::mpsc;                                
+    9  //!    3    mdview           claude    ◌ stale >30m  │   21  use std::thread;                                    
+       ↪   ~/dev/main/mdview                                │   22  use std::time::Duration;                            
+   10  //!    4    src              nvim                    │   23                                                      
+       ↪   ~/dev/main/oko/src                               │   24  use anyhow::{Result, bail};                         
+   11  //!  ────────────────────────────────────────────────│   25  use serde_json::json;                               
+ NOR   src/ui.rs                                 1 sel  1:1 │       src/follow.rs                            1 sel  1:1 
+                                                                                                                        

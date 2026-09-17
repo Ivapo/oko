@@ -30,7 +30,7 @@ mod iterm;
 mod status;
 
 use iterm::api::NotificationType;
-use iterm::{Client, flatten, own_tty, resolve_own_session};
+use iterm::{Client, flatten, helix, own_tty, resolve_own_session};
 
 /// Its own name, so the dashboard's authorization is never disturbed by a diagnostic run.
 const ADVISORY_NAME: &str = "oko-probe";
@@ -347,6 +347,9 @@ fn hx(session: Option<&str>) -> Result<()> {
         for (i, row) in rows.iter().enumerate() {
             println!("  {i:>3} {row:?}");
         }
+        // What the dashboard would make of that screen, beside the screen itself: the two
+        // together are the whole of "why does this row say what it says".
+        println!("  {:<20} {:?}", "parser", helix::open_file(&rows));
         println!();
         println!("  capture it:  oko-probe hx {} > <fixture>.txt", p.session_id);
         println!();

@@ -1,0 +1,40 @@
+   895                                                                                                                  
+   896  1. **A window title.** Helix sets none. Run in a pty for four seconds it wrote zero OSC 0, 1                    
+   897     or 2 sequences, and its editor configuration has no title key — not in the 25.07.1                           
+   898     binary's key list, not in the upstream `master` documentation. It is an open upstream                        
+   899     request (`helix-editor/helix#2436`; `#2887` asks the same thing and was closed as its                        
+   900     duplicate).                                                                                                  
+   901  2. **iTerm2's own variables.** `commandLine` read `hx /Users/…/main.py`, and                                    
+   902     `terminalWindowName` read `hx '/Users/…/main.py'` — the shell's pre-exec title, not                          
+   903     Helix's. **Both are the launch arguments and stay them**: `hx .`, `:open`, the file                          
+   904     picker, `gf` and a buffer switch all change what is open and change neither. A row built                     
+   905     on them is right until the first file Helix opens by itself and confidently wrong for the                    
+   906     rest of the session — §2.7's failure, with no staleness rule to catch it.                                    
+   907  3. **An open file descriptor.** `lsof` on the Helix process showed one regular file,                            
+   908     `~/.cache/helix/helix.log`. Helix reads a file and closes it.                                                
+   909  4. **A hook.** Helix 25.07.1 has no event hooks and no plugin system, so there is nothing to                    
+   910     register an `oko-hook` equivalent with.                                                                      
+   911                                                                                                                  
+   912  What remains is the screen. A `GetBufferRequest` on that pane returned its 44 rows, and row 42                  
+   913  read ` NOR   dev/labs/claude-certified-architect/main.py … 1 sel  10:1`.                                        
+   914                                                                                                                  
+   915  **Why this does not reopen §2.7.** §2.7 rejected reading the screen for *status*, on two                        
+   916  grounds, and neither reaches this. There a structured source existed — hooks — and the screen                   
+   917  would have been a worse copy of it; here nothing structured exists at all. And there the                        
+   918  value read was the product's call to action: a wrong `waiting` sends a human to the wrong tab                   
+   919  and is trusted because it is what the dashboard is for. A file name is context. **§2.7's                        
+   920  principle is the one this design is built to keep rather than argue around**: the failure                       
+   921  mode must be a value that stops updating, not one that lies. So a row gets a file only from a                   
+   922  line matching Helix's status-line shape in full. Anything else — a customised status line, an                   
+   923  overlay covering it, a screen mid-redraw — yields no new value, and a row that has never                        
+   924  matched reads plain `hx`, exactly as it does today.                                                             
+   925                                                                                                                  
+   926  **The line is found by where it starts, not by where the cursor is.** Helix draws one status                    
+   927  line per view, and only the focused view's carries a mode name — for an unfocused view                          
+   928  `render_mode` writes five blanks (helix-term, `ui/statusline.rs`, tag `25.07.1`). That alone                    
+   929  does not identify it, because **a file's own text can look exactly like a status line, and in                   
+   930  this repository one does**: this section quotes ` NOR   dev/…/main.py … 1 sel  10:1`, so                        
+   931  editing this spec in Helix puts a counterfeit on the screen. What separates them is the left                    
+   932  edge — Helix draws buffer text after a gutter, five elements wide by default, and a status                      
+ NOR   specs/tab_dashboard_spec.md                                                                        1 sel  913:16 
+                                                                                                                        
