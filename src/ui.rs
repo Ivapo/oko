@@ -38,7 +38,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row as TableRow, Table, TableState};
 
-use crate::iterm::{Cmd, Event as ItermEvent, Row, Snapshot};
+use crate::iterm::{Cmd, Event as ItermEvent, Row, Snapshot, helix};
 use crate::status::{Shown, Status};
 
 /// The status column's width, and it is **counted rather than trusted**.
@@ -368,7 +368,14 @@ fn render_row(row: &Row, edit: Option<&Edit>) -> TableRow<'static> {
     // is a display value and never an identity test.
     let process = match row.status {
         Some(_) => "claude".to_string(),
-        None => row.process.clone().unwrap_or_else(|| "-".to_string()),
+        None => match (row.process.as_deref(), row.file.as_deref()) {
+            // §2.17: the file's base name, in the process cell. The column keeps its width,
+            // so a long name is cut exactly as a long `jobName` already is. A row carrying a
+            // status is untouched above — its job is never `hx`.
+            (Some(job), Some(file)) if job == helix::JOB_NAME => format!("{job} {file}"),
+            (Some(job), _) => job.to_string(),
+            (None, _) => "-".to_string(),
+        },
     };
     TableRow::new(vec![
         Cell::from(row.tab.to_string()),
@@ -599,6 +606,20 @@ mod tests {
         }
     }
 
+    /// A Helix row, for the one thing §2.17 puts on screen.
+    fn helix_row(file: Option<&str>) -> Row {
+        Row {
+            session_id: "C".to_string(),
+            tab: 3,
+            process: Some("hx".to_string()),
+            path: Some("/Users/me/dev/main/oko".to_string()),
+            file: file.map(str::to_owned),
+            stored_name: None,
+            name: Some("oko".to_string()),
+            status: None,
+        }
+    }
+
     #[test]
     fn the_age_is_not_truncated_in_the_drawn_table() {
         let lines = render(
@@ -611,6 +632,7 @@ mod tests {
                     status: Status::Waiting,
                     age: Some(Age::M30),
                 }),
+                helix_row(Some("main.rs")),
             ],
             100,
         );
@@ -631,6 +653,10 @@ mod tests {
         assert!(index("status") < index("where"));
         // A row carrying a status reads `claude`, never the job name (OQ-2).
         assert!(!table.contains("node"), "{table}");
+        // **The observable Phase 9 adds**, in the cell §2.17 puts it in — and this test
+        // rather than a new one, because check 12 reads the per-binary test counts and
+        // `oko-probe` does not compile this file.
+        assert!(table.contains("hx main.rs"), "{table}");
     }
 
     #[test]
