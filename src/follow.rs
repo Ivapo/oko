@@ -225,6 +225,8 @@ mod tests {
             process: Some("node".to_string()),
             path: Some("/Users/me/dev/main/oko".to_string()),
             stored_name: Some("api work".to_string()),
+            // Set, and deliberately unpublished: `row_json` carries no file (§2.17).
+            file: Some("main.rs".to_string()),
             name: Some("api work".to_string()),
             status: Some(shown),
         }
@@ -237,6 +239,7 @@ mod tests {
             process: job.map(str::to_owned),
             path: Some("/Users/me/dev/main".to_string()),
             stored_name: None,
+            file: None,
             name: Some("main".to_string()),
             status: None,
         }

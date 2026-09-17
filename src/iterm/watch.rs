@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use time::OffsetDateTime;
@@ -34,6 +34,7 @@ use super::api::{
     ListSessionsResponse, Notification, NotificationType, SessionSummary, SplitTreeNode,
 };
 use super::client::{Client, decode_json_value};
+use super::helix::{self, Open};
 use crate::status::{Shown, Store};
 
 /// The variables a row is made of: the two §2.2 names, and the name §2.10 stores.
@@ -57,6 +58,23 @@ pub const OKO_NAME: &str = "user.okoName";
 /// Not a poll of iTerm2 — nothing is asked for; it is how fast a keystroke is served.
 const IDLE_TICK: Duration = Duration::from_millis(100);
 
+/// How long a Helix pane's screen must be quiet before it is read (OQ-16).
+///
+/// **Every number under it was measured**: an idle Helix sends no update at all, one
+/// keystroke is exactly one update, a held key delivers them 15–49 ms apart and a language
+/// server starting bursts at 11–17 ms. The window sits above every one of those gaps, so a
+/// burst is read once after it ends rather than repeatedly while it runs. It cannot go below
+/// [`IDLE_TICK`], which is the pace the watcher's own wake-ups could honour it at.
+///
+/// It sits deliberately *above* the ~140 ms between two keystrokes, so sustained typing never
+/// goes quiet and is served by [`SCREEN_CEILING`] instead — about eight reads a minute while
+/// someone types without pause, against one per pause if the window sat under the cadence.
+const SCREEN_QUIET: Duration = Duration::from_millis(250);
+
+/// …or this long after the first update Oko has not read, whichever comes first, so a screen
+/// that never goes quiet — a key held down, a language server starting — is still read.
+const SCREEN_CEILING: Duration = Duration::from_secs(2);
+
 /// One line of the table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -69,6 +87,24 @@ pub struct Row {
     /// literal `claude` instead** (OQ-2) — that is `src/ui.rs`'s doing, not this field's.
     pub process: Option<String>,
     pub path: Option<String>,
+    /// The file open in a Helix pane — its base name, or `None` (§2.17).
+    ///
+    /// **Held on the watcher's rows like [`path`], unlike [`name`] and [`status`]**, and
+    /// patched by a screen read rather than by a notification, so
+    /// [`emit_if_changed`](Watcher::emit_if_changed)'s one comparison sees it and a changed
+    /// file is an emission. `rescan` carries it forward for the same reason it carries
+    /// `path`: a layout change rebuilds every row, and a `file` dropped there would blank
+    /// every Helix row each time any tab in the window opened, closed or moved.
+    ///
+    /// **`None` is two different things on purpose** — a row that is not Helix, and a Helix
+    /// row whose screen has never matched a status line — and both draw plain `hx`.
+    /// `src/follow.rs:row_json` does not publish it (§2.17), so a file switch serializes to
+    /// the line already sent and the stream suppresses it.
+    ///
+    /// [`path`]: Row::path
+    /// [`name`]: Row::name
+    /// [`status`]: Row::status
+    pub file: Option<String>,
     /// The row's stored name: `user.okoName`, or `None` when nobody has named it.
     ///
     /// A variable like `path` and `jobName`, held here and patched by the same notification
@@ -144,6 +180,41 @@ pub struct Placed {
     pub tab: usize,
 }
 
+/// What a Helix session owes: a read now, or a read once its screen settles (§2.17).
+#[derive(Clone, Copy, Debug)]
+enum Due {
+    /// At once, with no update behind it — a pane whose `jobName` has just become `hx`, which
+    /// drew its status line before any subscription existed and whose next update may never
+    /// come.
+    AtOnce,
+    /// After [`SCREEN_QUIET`] of quiet, or [`SCREEN_CEILING`] after the first update Oko has
+    /// not read, whichever comes first.
+    Updates { first_unread: Instant, latest: Instant },
+}
+
+impl Due {
+    fn is_due(self, now: Instant) -> bool {
+        match self {
+            Due::AtOnce => true,
+            Due::Updates { first_unread, latest } => {
+                now.duration_since(latest) >= SCREEN_QUIET
+                    || now.duration_since(first_unread) >= SCREEN_CEILING
+            }
+        }
+    }
+
+    /// One more update for a session that already owes a read.
+    fn updated(self, now: Instant) -> Due {
+        match self {
+            // **Staying `AtOnce` is deliberate**: an update is no reason to start waiting out
+            // a window before a read the pane's first draw already needed.
+            Due::AtOnce => Due::AtOnce,
+            // The *first* unread never moves; only the latest does.
+            Due::Updates { first_unread, .. } => Due::Updates { first_unread, latest: now },
+        }
+    }
+}
+
 pub struct Watcher {
     client: Client,
     own_session: String,
@@ -155,12 +226,29 @@ pub struct Watcher {
     /// window and comes back is still subscribed — resubscribing it would be a second
     /// notification for every change.
     subscribed: HashSet<(String, &'static str)>,
+    /// Whether the dashboard turned Helix tracking on. **Off until it does** (§2.17):
+    /// `--follow` publishes no file, so its reads would be pure cost, and a one-shot command
+    /// would pay a subscription round trip per Helix pane to send one request and exit.
+    tracking_helix: bool,
+    /// Sessions subscribed to `NOTIFY_ON_SCREEN_UPDATE`, and therefore **attempted exactly
+    /// once each**: the entry is made whether or not iTerm2 accepted, so a session it refuses
+    /// costs one round trip and not one per pass. A session that leaves the window keeps its
+    /// entry, for the reason it keeps its variable ones ([`subscribed`]) — its updates arrive,
+    /// match no row and cost no read.
+    ///
+    /// [`subscribed`]: Watcher::subscribed
+    screen_subscribed: HashSet<String>,
+    /// Which sessions owe a screen read, and when it comes due. An entry is a read not yet
+    /// taken; taking it removes the entry.
+    due_reads: HashMap<String, Due>,
     /// What the hooks have written, and the mtime that says whether to look again.
     status: Store,
     /// The last snapshot handed to the UI, so nothing is sent twice.
     emitted: Snapshot,
     /// Where to record each emission, under `OKO_DEBUG_EMITS`. See [`log_emit`].
     emits_log: Option<PathBuf>,
+    /// Where to record each screen read, under `OKO_DEBUG_READS`. See [`log_read`].
+    reads_log: Option<PathBuf>,
 }
 
 impl Watcher {
@@ -179,9 +267,15 @@ impl Watcher {
             window_number: None,
             rows: Vec::new(),
             subscribed: HashSet::new(),
+            // Off here and turned on by the dashboard alone, so the `rescan` below subscribes
+            // no screen and the first snapshot carries no file.
+            tracking_helix: false,
+            screen_subscribed: HashSet::new(),
+            due_reads: HashMap::new(),
             status: Store::open(),
             emitted: Snapshot::default(),
             emits_log: emits_log(),
+            reads_log: reads_log(),
         };
         // Before the first rescan, so its sweep runs against statuses that were read: a pane
         // that died while Oko was closed is cleaned up here, where no hook ever ran for it.
@@ -210,6 +304,123 @@ impl Watcher {
             })
             .collect();
         Snapshot { window_number: self.window_number, rows }
+    }
+
+    /// Starts tracking what Helix panes have open (§2.17).
+    ///
+    /// **The dashboard calls this and nothing else does.** [`Watcher::connect`] is shared by
+    /// the dashboard, `--follow` and both one-shot commands (`src/main.rs:run`), and only one
+    /// of the four draws a file: the stream does not publish it, so its reads would be pure
+    /// cost, and a one-shot command would pay a subscription round trip per Helix pane in
+    /// order to send one request and exit.
+    ///
+    /// It sweeps the rows that already exist, so a Helix pane running before Oko started is
+    /// subscribed and read exactly as one that arrives later is.
+    pub fn track_helix(&mut self) {
+        self.tracking_helix = true;
+        let sessions: Vec<String> = self.rows.iter().map(|r| r.session_id.clone()).collect();
+        for session in sessions {
+            self.sync_helix(&session);
+        }
+    }
+
+    /// Brings one session's screen subscription and its [`Row::file`] into line with its
+    /// `jobName`.
+    ///
+    /// A job that becomes `hx` is subscribed and marked due at once; one that stops being
+    /// `hx` is unsubscribed and its file and its mark cleared **in the same pass**, so a quit
+    /// Helix never leaves its last file on a shell row. Idempotent, never retried, and a
+    /// no-op while tracking is off.
+    ///
+    /// **Neither request is fatal, unlike a failed `apply`.** A screen subscription serves
+    /// one optional cell, and a dead watcher costs the status column, `↵`, `r` and every row;
+    /// nothing is hidden by swallowing it either, because a broken connection reaches
+    /// [`next_notification`](Client::next_notification) on the very next pass.
+    fn sync_helix(&mut self, session_id: &str) {
+        if !self.tracking_helix {
+            return;
+        }
+        let is_helix = self
+            .rows
+            .iter()
+            .any(|r| r.session_id == session_id && r.process.as_deref() == Some(helix::JOB_NAME));
+
+        if is_helix {
+            // The entry is made whether or not iTerm2 accepts, which is what bounds a refusal
+            // at one round trip rather than one per 100 ms pass.
+            if self.screen_subscribed.insert(session_id.to_string()) {
+                let _ = self.client.watch_screen(session_id, true);
+                self.due_reads.insert(session_id.to_string(), Due::AtOnce);
+            }
+            return;
+        }
+
+        if self.screen_subscribed.remove(session_id) {
+            let _ = self.client.watch_screen(session_id, false);
+        }
+        self.due_reads.remove(session_id);
+        if let Some(row) = self.rows.iter_mut().find(|r| r.session_id == session_id) {
+            row.file = None;
+        }
+    }
+
+    /// Reads every Helix screen that has come due, and patches its row.
+    ///
+    /// **Runs on every pass of [`run`](Self::run), not only the passes that carried a
+    /// notification** (§2.17). That distinction is the whole mechanism: the read that matters
+    /// is the one *after* the updates stop, and a pass gated on a notification arriving is a
+    /// pass that never happens once they do.
+    ///
+    /// A read is a round trip on the thread that also serves `↵`, so several panes coming due
+    /// together cost several before the next command is looked at. That is §2.17's stated
+    /// cost, and it is why one update does not mean one read.
+    fn read_due_screens(&mut self) {
+        if !self.tracking_helix || self.due_reads.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let due: Vec<String> = self
+            .due_reads
+            .iter()
+            .filter(|(_, due)| due.is_due(now))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in due {
+            // Cleared **before** the read and whether or not it succeeds: a failed read is
+            // not fatal (§2.17), and a mark left behind would retry it on every pass.
+            self.due_reads.remove(&id);
+            self.read_screen(&id);
+        }
+    }
+
+    /// One read: the screen, the parser, and what its answer does to the row.
+    fn read_screen(&mut self, session_id: &str) {
+        // The row can have gone, or stopped being Helix, since the mark was made. **No row,
+        // no read and no line in the log**: `wc -l` is what the cost checks count.
+        if !self
+            .rows
+            .iter()
+            .any(|r| r.session_id == session_id && r.process.as_deref() == Some(helix::JOB_NAME))
+        {
+            return;
+        }
+        let rows = self.client.screen(session_id);
+        log_read(self.reads_log.as_deref());
+        // Not fatal: `file` stays as it was, and a broken connection surfaces at the next
+        // `next_notification` anyway.
+        let Ok(rows) = rows else {
+            return;
+        };
+        let answer = helix::open_file(&rows);
+        if let Some(row) = self.rows.iter_mut().find(|r| r.session_id == session_id) {
+            match answer {
+                Open::File(name) => row.file = Some(name),
+                Open::NoFile => row.file = None,
+                // An overlay, a customised status line, a screen mid-redraw: the last value
+                // stands. **This branch is what §2.7 is about** — absence, never a wrong name.
+                Open::NoStatusLine => {}
+            }
+        }
     }
 
     pub fn own_session(&self) -> &str {
@@ -264,6 +475,11 @@ impl Watcher {
                     return;
                 }
             }
+
+            // After the notification, so a job that became `hx` on this pass is read on it,
+            // and a pane unsubscribed on this pass has already lost its mark. Before the
+            // emission, so every read of the pass lands in one snapshot.
+            self.read_due_screens();
 
             if !self.emit_if_changed(&mut emit) {
                 return;
@@ -341,12 +557,43 @@ impl Watcher {
             };
             match name.as_str() {
                 "path" => row.path = value,
-                "jobName" => row.process = value,
+                "jobName" => {
+                    row.process = value;
+                    // A job change can start or stop a Helix pane, and this is what either
+                    // one means: subscribe and read at once, or unsubscribe and clear.
+                    self.sync_helix(id);
+                }
                 // Which is how a rename made in *another* Oko instance arrives here: one
                 // value on the session, seen by every client watching it, no sync protocol.
                 OKO_NAME => row.stored_name = value,
                 _ => {}
             }
+            return Ok(());
+        }
+
+        // A screen update, which carries the session id and nothing else — it cannot say
+        // what changed, so it schedules a read rather than being one.
+        if let Some(update) = &n.screen_update_notification {
+            let Some(id) = &update.session else {
+                return Ok(());
+            };
+            // **A row running `hx` is required.** A session that leaves the window keeps its
+            // subscription on purpose and a cancel can be refused, so an update belonging to
+            // no Helix row of ours must cost nothing: a shell's screen updates are exactly
+            // this case, and they must cost no read.
+            if !self.tracking_helix
+                || !self.rows.iter().any(|r| {
+                    &r.session_id == id && r.process.as_deref() == Some(helix::JOB_NAME)
+                })
+            {
+                return Ok(());
+            }
+            let now = Instant::now();
+            let due = match self.due_reads.get(id) {
+                Some(due) => due.updated(now),
+                None => Due::Updates { first_unread: now, latest: now },
+            };
+            self.due_reads.insert(id.clone(), due);
             return Ok(());
         }
 
@@ -392,12 +639,15 @@ impl Watcher {
         for p in placed.iter().filter(|p| p.window_id == self.window_id) {
             // Values already held stay: a rescan is about shape, and re-reading every
             // variable on every layout change would be a poll wearing a subscription's hat.
-            let known = self
-                .rows
-                .iter()
-                .find(|r| r.session_id == p.session_id)
-                .map(|r| (r.process.clone(), r.path.clone(), r.stored_name.clone()));
-            let (process, path, stored_name) = match known {
+            let known = self.rows.iter().find(|r| r.session_id == p.session_id).map(|r| {
+                (r.process.clone(), r.path.clone(), r.stored_name.clone(), r.file.clone())
+            });
+            // **`file` is carried forward like the rest**, and that is not tidiness: a layout
+            // change rebuilds every row, so a `file` dropped here would blank every Helix row
+            // each time any tab in the window opened, closed or moved — repaired within
+            // 250 ms only if that pane happened to redraw, which makes the visible defect a
+            // name that comes and goes.
+            let (process, path, stored_name, file) = match known {
                 Some(values) => values,
                 None => {
                     let vars = self.client.variables(&p.session_id, &ROW_VARS)?;
@@ -405,6 +655,9 @@ impl Watcher {
                         vars.get("jobName").cloned(),
                         vars.get("path").cloned(),
                         vars.get(OKO_NAME).cloned(),
+                        // A session met for the first time has no file yet; the read the
+                        // sweep below schedules is what gives it one.
+                        None,
                     )
                 }
             };
@@ -417,6 +670,7 @@ impl Watcher {
                 process,
                 path,
                 stored_name,
+                file,
                 name: None,
                 status: None,
             });
@@ -431,6 +685,14 @@ impl Watcher {
         }
 
         self.rows = rows;
+
+        // After the assignment, because it reads the rows it acts on. Every row rather than
+        // only the newly met ones: for a session already tracked it is a set lookup and costs
+        // no read, and it repairs a transition a dropped notification lost.
+        let sessions: Vec<String> = self.rows.iter().map(|r| r.session_id.clone()).collect();
+        for session in sessions {
+            self.sync_helix(&session);
+        }
         Ok(())
     }
 
@@ -590,10 +852,25 @@ fn last_component(path: Option<&str>) -> Option<String> {
     }
 }
 
+/// `~/.oko/<file>`, or `None` unless `var` is set.
+fn debug_log(var: &str, file: &str) -> Option<PathBuf> {
+    std::env::var_os(var)?;
+    crate::status::oko_dir().ok().map(|dir| dir.join(file))
+}
+
 /// `~/.oko/emits.log`, or `None` unless `OKO_DEBUG_EMITS` is set.
+///
+/// **This keeps its name, and so does [`log_emit`], because the spec cites both** — an
+/// append-only document, and `spec-lint` resolves `file:symbol` citations against the source.
+/// So Phase 9's second log is two one-line wrappers beside these rather than a rename of
+/// them.
 fn emits_log() -> Option<PathBuf> {
-    std::env::var_os("OKO_DEBUG_EMITS")?;
-    crate::status::oko_dir().ok().map(|dir| dir.join("emits.log"))
+    debug_log("OKO_DEBUG_EMITS", "emits.log")
+}
+
+/// `~/.oko/reads.log`, or `None` unless `OKO_DEBUG_READS` is set.
+fn reads_log() -> Option<PathBuf> {
+    debug_log("OKO_DEBUG_READS", "reads.log")
 }
 
 /// One line per emission, for the check that Oko stays quiet.
@@ -614,6 +891,24 @@ fn emits_log() -> Option<PathBuf> {
 /// It cannot perturb what it measures: it changes no `Snapshot` field and does not touch
 /// `~/.oko/status/`, whose mtime is what `src/status.rs:Store::refresh` gates on.
 fn log_emit(path: Option<&Path>) {
+    log_timestamp(path);
+}
+
+/// One line per screen read, for the checks that bound what reading costs (§2.17).
+///
+/// The cost property — an idle Helix reads nothing, a busy one a bounded number of times — is
+/// invisible on screen, which is Phase 4's check 9 problem again and gets Phase 4's answer.
+/// **A timestamp and nothing else: no session id and no file name.** `wc -l` is all the gate
+/// reads, and a log of file names is a second record of what someone was editing that nothing
+/// needs.
+fn log_read(path: Option<&Path>) {
+    log_timestamp(path);
+}
+
+/// The body both of the above share: one RFC-3339 line, appended, creating the directory if
+/// it has to, and silent about every failure — a diagnostic that could break the thing it
+/// measures is worse than no diagnostic.
+fn log_timestamp(path: Option<&Path>) {
     let Some(path) = path else {
         return;
     };
@@ -651,6 +946,7 @@ mod tests {
             process: None,
             path: Some(path.to_string()),
             stored_name: stored.map(str::to_owned),
+            file: None,
             name: None,
             status: None,
         };

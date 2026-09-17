@@ -493,6 +493,7 @@ mod tests {
                 process: None,
                 path: Some("/Users/me/dev/main/oko".to_string()),
                 stored_name: None,
+                file: None,
                 name: name.map(str::to_owned),
                 status: None,
             }],
@@ -591,6 +592,8 @@ mod tests {
             process: Some("node".to_string()),
             path: Some("/Users/me/dev/main/spec-driven-dev".to_string()),
             stored_name: Some(name.to_string()),
+            // A status row's job is never `hx`, and its cell reads `claude` whatever this is.
+            file: None,
             name: Some(name.to_string()),
             status: Some(shown),
         }

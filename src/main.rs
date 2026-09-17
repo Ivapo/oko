@@ -191,7 +191,12 @@ fn run() -> Result<()> {
 
     // Connect before the alternate screen exists: "the API is off" is a message a human
     // acts on, and it would otherwise flash past between init and restore.
-    let watcher = Watcher::connect(ADVISORY_NAME)?;
+    let mut watcher = Watcher::connect(ADVISORY_NAME)?;
+    // **Here and nowhere else** (§2.17). `Watcher::connect` is shared by the dashboard,
+    // `--follow` and both one-shot commands, and only this one draws a file: the stream
+    // publishes none, so its reads would be pure cost, and a one-shot command would pay a
+    // subscription per Helix pane to send one request and exit.
+    watcher.track_helix();
     let initial = watcher.snapshot();
 
     let (events_tx, events_rx) = mpsc::channel();
