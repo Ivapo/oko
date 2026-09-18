@@ -2,8 +2,9 @@
 id: oko-001
 title: tab-dashboard
 note: >
-  The iTerm2 dashboard tab — live per-tab directory, process and Claude Code status for
-  every tab in the window, with Enter to jump to the selected one.
+  The iTerm2 dashboard tab — live per-tab directory, process, the file open in a Helix tab
+  and Claude Code status for every tab in the window, with Enter to jump to the selected
+  one.
 status: accepted
 last_updated: 2026-09-17
 
@@ -50,7 +51,7 @@ phases:
     by: null
   - name: "Phase 9 — what a Helix tab has open"
     reviewed: 2026-09-17
-    shipped: null
+    shipped: 2026-09-17
     cut: null
     by: null
 
@@ -194,6 +195,20 @@ one exists: on this machine that is `node`, because the session runs an MCP serv
 why it cannot be an identity test. This is the single most consequential correction in
 this section: it is why §1's sketch labels Claude rows from the status file rather than
 the job name, and it is what OQ-2 is really about.
+
+**CORRECTED 2026-09-17 (Phase 9's close-out, and it refines OQ-15 rather than repeating
+it).** The word doing the work in the paragraph above is **foreground**, and OQ-15 read past
+it: that question concluded this section was contradicted, because `jobName` stays `hx` over a
+Helix pane running a language server, where "the deepest job" would predict `node` or
+`rust-analyzer-pr`. Measured again at close-out, on two live panes and their process trees:
+`jobName` follows a descendant when the descendant is in the session's **foreground process
+group** — this machine's own Claude Code pane reads `caffeinate`, a child of `claude` — and
+stays at the top-level job when the descendant is not, which is where an editor's language
+server lives. `deepestJob` is the variable that descends regardless. **So the sentence above
+is right and OQ-15's "does not fit" is the part that was wrong**; what neither said is which
+descendants count, and that distinction is exactly what lets Phase 9 gate on `jobName` at
+all. §2.2's conclusion is untouched either way: the name is a function of the user's
+configuration and never an identity test (OQ-2).
 
 **No per-tab installation, no shell cooperation, nothing sourced in a profile** — a plain
 row costs the user nothing beyond enabling the API once (§2.1). That is the contrast with
@@ -2944,3 +2959,28 @@ the easy case and a wrong one in those is worse than the `hx` it replaces.*
   branch and a PR, and it is the author's call rather than an oversight: this phase's review
   converged before any code exists, so the PR would have no reviewer left to serve. **One
   push, as §3 requires** — the unit is the push, not the branch.
+
+**CORRECTED 2026-09-17 (at the close-out, from running this gate).** Two of these checks
+measure with a counter that counts more than the check is about, and a re-runner needs to know
+which. **The gate passed on both; neither note excuses a failure.**
+
+- **Check 11's `wc -l` cannot be unchanged.** `src/follow.rs:KEEPALIVE` puts a bare newline on
+  the stream every five seconds, so the raw line count rises about twelve a minute against any
+  build — 24 to 93 over this run. The property is about *snapshot* lines: measured over checks
+  2 **and** 3 — five file switches and three view changes — the non-blank count held at 3, and
+  the last line carried `job: hx` with no `file` key at all.
+- **Check 10's "at least 4 and at most 7" is a count keyed to a 10.0-second hold and a
+  baseline taken immediately before it.** Two things push the total past 7 with nothing wrong:
+  a longer hold, which the log's own cadence exposed on the first attempt at ~14 s and for
+  which **8 is the arithmetically correct answer**; and a stray update after the three-second
+  window — Helix turns mouse reporting on, so a mouse crossing the pane is an update like any
+  other. **The invariant is a rate rather than a count**: one read per 2.08–2.19 s of
+  continuously-updating screen — the 2 s ceiling plus one `IDLE_TICK` plus the round trip —
+  and exactly one read once the updates stop. A stopwatched ten seconds gave five ceiling
+  reads and one release read, which is 6.
+
+**What the cost checks measured, since they are the ones no screen can show.** An idle Helix:
+**0 reads in 60 seconds**, and 0 again over a 95-second re-measurement whose screen text
+hashed identically at both ends. A shell after `:q`: **0 reads** across ten `ls` commands. A
+file switch: **exactly one read each** for `:open`, a picker selection and `:buffer-previous`,
+each landing within two seconds.
