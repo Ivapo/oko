@@ -54,6 +54,11 @@ phases:
     shipped: 2026-09-17
     cut: null
     by: null
+  - name: "Phase 10 — the Helix file on the stream"
+    reviewed: 2026-09-17
+    shipped: null
+    cut: null
+    by: null
 
 extends: null
 supersedes: null
@@ -1039,6 +1044,86 @@ candidate and the rule answers nothing while it is on screen. A Helix release th
 the line lands the same way, and that is §2.7's version-less-UI risk, taken here because its
 failure is absence and because the parser's fixtures, captured from a real Helix, are where a
 reshaped line shows up first.
+
+### 2.18 The file on the stream, and what a key costs a consumer (decision, recorded — added by Phase 10)
+
+§2.17 declined to publish the Helix file on `--follow`, in one sentence with one reason: "a
+field is `schema: 2` and a phase of its own, by OQ-12's reasoning, and **no consumer has
+asked**." One has now. panex-tui draws a card per row (§2.14, `Ivapo/PanEx#3`) and its author
+opened Oko's dashboard expecting the file there too — which is the same trigger Phase 6 had,
+a consumer meeting the edge of what the stream carries, and the same answer: the stream grows
+when someone wants what it withholds, not before.
+
+**So `--follow` publishes the file, and the whole of this phase is what that costs.**
+
+**The schema is the crux, and the two options are not symmetric.** OQ-9's contract is strict:
+a consumer meeting a `schema` it does not recognise "renders **nothing** and says so, rather
+than draw the fields it recognises". Read against that:
+
+- **`schema: 2`** is the by-the-book answer and it **breaks the consumer this phase is for**.
+  panex-tui checks the header and refuses a schema it does not know — `crates/panex-tui/src/oko.rs`
+  says so in as many words, "oko speaks stream schema N; this build draws M". So the release
+  that adds the file *blanks the existing card view* until panex-tui ships its half, and it
+  blanks it for every other consumer too, to add one optional key.
+- **A new key under `schema: 1`** is invisible to a consumer that does not know it.
+  **Measured rather than assumed**: panex-tui's `Row` is a plain `serde` struct with **no
+  `deny_unknown_fields`** — the attribute appears nowhere in that crate — so an unknown key is
+  dropped on the floor and the card view goes on drawing. Its own test fixture already proves
+  it: the captured snapshot carries a `claude` key the struct does not declare, and its suite
+  passes. (Most of its optional fields carry `#[serde(default)]`; `name` does not, which
+  changes nothing here — the conclusion rests on the absent attribute, not on the present
+  ones.)
+
+**The second, and the argument is about what `schema` is for rather than about convenience.**
+`schema` names *what a consumer must understand in order to draw a row*. A key it can ignore
+does not change that, and the schema already forces a consumer to tolerate absence: `claude`
+and `job` are mutually exclusive, so half the keys of any given row are missing by design and
+every consumer is already written for it. **What a bump would communicate here is "stop
+drawing", which is the opposite of what is true.** So `schema: 2` is reserved for a change
+that makes an old reader *wrong* — a field renamed, a meaning moved, a row shape changed —
+and this is not one.
+
+**The cost of that choice, stated rather than hidden: `schema: 1` stops being one thing.** A
+consumer written against schema 1 today and one written tomorrow see different lines, and the
+only discriminator is the header's version string, which OQ-14 settled as naming the build.
+That is a real loss of precision and it is accepted because the alternative spends a working
+card view to buy it.
+
+**The key is absent, not null, and it is absent for three different rows.** `file` appears
+only on a row whose job is `hx` and whose screen has been read into a file name, exactly as
+`job` appears only on a row without a status. A row that is not Helix carries no `file`; a
+Helix row whose status line has never matched carries none either, **and a consumer can tell
+those two apart without a new field** — the first has no `job: "hx"` and the second does,
+which is the same absence the dashboard draws as plain `hx`.
+
+**`--follow` has to start reading, and that retires §2.17's "only the dashboard reads".** That
+sentence rested on a premise this phase removes: reads were pure cost for the stream *because
+the stream published nothing*. `src/iterm/watch.rs:Watcher::track_helix` is called from the
+stream's branch too — **and from neither one-shot command**, which keeps the rest of that
+section's argument intact: `oko --activate` would still pay a subscription per Helix pane to
+send one request and exit, and it still refuses to.
+
+**Two watchers in one window now read the same panes.** A dashboard and a `--follow` both
+subscribe every Helix session and both take their own reads, so the round trips double. That
+is cost and not incorrectness, and each one's reads stay bounded by its own 250 ms window and
+2 s ceiling — but **§2.13's "two instances are safe" does not reach this case and is not being
+leaned on**: that argument is about `user.okoName` and the status sweep, and **nothing has
+measured two clients each holding a per-session `NOTIFY_ON_SCREEN_UPDATE` subscription.**
+iTerm2 fanning that out to both is an assumption until the gate runs, which is why **check 2**
+is that measurement as well as a feature check: a fan-out serving one client only still passes
+check 1, whose read is scheduled by the `jobName` notification rather than by a screen update,
+and fails check 2, where every read after the first is.
+
+**What the stream loses is its silence about editing.** §2.17 leaned on the file *not* being
+published: a file switch built a snapshot whose serialized line matched the last one sent, so
+the stream stayed quiet through a whole editing session. Now a file switch is a line, which is
+the point, and the bound is the read schedule rather than the typing: at most one line per
+250 ms of quiet and, inside a burst, one per 2 s. A human moving between files a dozen times a
+minute costs a dozen lines; §2.11's "a handful of times a day" was never a promise about panes
+that are being edited.
+
+**Three things this deliberately does not do**, inheriting §2.17's boundaries rather than
+re-arguing them: no `[+]`, no path — the base name and nothing else — and no editor but `hx`.
 
 ## 3. Open questions
 
@@ -2984,3 +3069,191 @@ which. **The gate passed on both; neither note excuses a failure.**
 hashed identically at both ends. A shell after `:q`: **0 reads** across ten `ls` commands. A
 file switch: **exactly one read each** for `:open`, a picker selection and `:buffer-previous`,
 each landing within two seconds.
+
+### Phase 10 — the Helix file on the stream
+
+*Produces the observable: **no**, and it is Phase 5's argument with the risk removed rather
+than named. Phase 5 shipped an interface and said in writing that the risk was "a JSON mode
+with no reader"; that risk closed when panex-tui read it. This phase adds one key to that
+interface for a consumer that exists, is installed, and has asked — so the visible payoff is
+again in another repository and another document, and again this phase's own output is an
+interface plus the tests that hold it still. **What is new is the failure it can cause.** Every
+phase before this could only fail by doing nothing; a stream change can blank a working card
+view, which is why the schema decision (§2.18) is the phase rather than a detail of it, and why
+the gate spends two checks on the consumer that is already running.*
+
+- **Scope.**
+  - **The stream** (`src/follow.rs`). `row_json` gains `file`, **present only** on a row whose
+    job is `hx` and whose file is known, absent otherwise — the shape `job` and `claude`
+    already have. `SCHEMA` **stays at 1** (§2.18). No other field moves, and the header is
+    untouched.
+  - **The switch** (`src/main.rs:run`, `src/follow.rs:run`). `Watcher::track_helix` is called
+    from the stream's branch as well as the dashboard's, and **from neither one-shot command**
+    — §2.18 keeps that half of §2.17's rule, so `--activate` and `--set-name` still connect,
+    act and exit **without subscribing any screen**. (They do subscribe `ROW_VARS`, layout and
+    new-session, because `Watcher::connect` calls `rescan`; the claim is about screens only.)
+    `src/follow.rs:run` binds `let watcher = Watcher::connect(…)` and needs `let mut watcher`,
+    which is the one edit in that file beyond `row_json` and the call.
+  - **The prose inside the watcher changes, and the mechanism does not.** `Row::file` is
+    already held and already patched by the read schedule, and `emit_if_changed` already sees
+    it, so **if this phase needs a line of *mechanism* in `src/iterm/watch.rs` or
+    `src/iterm/helix.rs`, something in Phase 9 was wrong** and that is worth knowing before
+    the gate. **But five pieces of in-code prose assert the rule this phase retires and must
+    be corrected in the same pass**, which the tripwire above deliberately does not cover:
+    `src/iterm/watch.rs:Watcher::track_helix`'s "the dashboard calls this and nothing else
+    does", the `tracking_helix` field's "`--follow` publishes no file, so its reads would be
+    pure cost", `Watcher::connect`'s "turned on by the dashboard alone", `Row::file`'s
+    "`row_json` does not publish it", and `src/main.rs:run`'s "here and nowhere else".
+    `src/bin/oko-probe.rs:hx`'s "the only oracle there is for what the dashboard actually
+    drew, since the stream publishes no file" is a sixth, in a file this phase otherwise does
+    not touch. **Nothing mechanical catches a stale comment** — not the suite, not clippy, not
+    the gate — and **five of the six sit in a file some rule declares as a `source`**, so a
+    comment left standing is a claim `/sync-rules` carries back into a rule: `watch.rs` feeds
+    `rules/helix-file.md`, `rules/dashboard-ui.md` and `rules/iterm-api.md`, and `src/main.rs`
+    feeds `rules/follow-stream.md` — **the very rule this phase edits**, whose `covers` is the
+    stream's shape and what it deliberately omits — as well as `dashboard-ui` and
+    `session-commands`. Only `src/bin/oko-probe.rs` is a source of nothing, and its comment is
+    simply wrong where it sits.
+  - **Not in scope, each a decision rather than an omission:** no `schema: 2`; no `[+]`; no
+    path, only the base name; no editor but `hx`; no new field for "Helix with no file",
+    which `job: "hx"` plus an absent `file` already distinguishes; and nothing in panex-tui,
+    which is a different repository and whose purple identity mark needs no field from here.
+- **Exit gate.** **This gate creates its own artifacts and inherits none** — Phase 9's
+  `/tmp/oko-9*` files were deleted at its close-out, and a check that silently depends on them
+  fails for a reason its text does not mention. Prepare `seq 1 5000 > /tmp/oko-10.txt` and
+  `for n in a b c; do seq 1 200 > /tmp/$n.txt; done` — **all `.txt`, so no language server
+  starts**, which is what lets the read counts come from the gate and not from an indexer.
+  **`/tmp/a.txt` and its siblings are check 8's switch targets, and the names are short on
+  purpose**: `:open /tmp/a.txt` is 16 characters, within a keystroke of the
+  `:open src/ui.rs` Phase 9 measured at exactly one read, while a name like
+  `/tmp/oko-10-a.txt` takes ~3.2 s to type at that same rate and fires the 2 s ceiling *while
+  the command is being typed* — two reads per switch instead of one,
+  which is a defect in the gate and not in the build. Also `/tmp/oko-10-nostatus.toml` holding
+  `[editor.statusline]`, `left = ["file-name"]` and `right = []`.
+  **One window, three panes**: a dashboard started with `OKO_DEBUG_READS=1`; a pane running
+  `./target/debug/oko --follow > /tmp/oko-10.jsonl` **without** that variable for now; and A, a
+  `zsh` in `~/dev/main/oko`. **Every literal below is compact JSON** — `serde_json` writes
+  `"file":"main.rs"` with no space after the colon, so that is what a `grep` must carry.
+  **panex-tui's card view spawns a third `oko --follow` of its own**, so it stays closed except
+  during check 5, and no read is counted while it is open.
+  1. **A Helix row carries the file.** In A, `hx src/main.rs`: within 2 seconds a line of
+     `/tmp/oko-10.jsonl` matches `"file":"main.rs"` on A's row, beside `"job":"hx"`.
+  2. **It follows Helix.** `:open src/ui.rs` → a line matching `"file":"ui.rs"`;
+     `:buffer-previous` → `"file":"main.rs"` again. Each within 2 seconds. **This is the check
+     that fails a build which publishes the field but never turns tracking on for the
+     stream** — with `tracking_helix` false the stream's `sync_helix`, `read_due_screens` and
+     screen-update branch all return early, so such a build emits no `file` key ever. (It
+     cannot instead publish the *dashboard's* value: the two are separate processes with
+     separate `Watcher`s and no shared state.) **This check, and not check 1, is §2.18's
+     fan-out measurement**: check 1's read is scheduled by the `jobName` notification, which
+     reaches both clients independently of `NOTIFY_ON_SCREEN_UPDATE`, so an iTerm2 that served
+     screen updates to one client only would still pass check 1 and fail here.
+  3. **The key is absent, not null.** `grep -c '"file":null' /tmp/oko-10.jsonl` is **0** at the
+     end of the gate — the whole capture, which is why leg 2 of check 8 appends rather than
+     truncates. Then three kinds of row, each read off the last non-blank line at the moment
+     the gate reaches it rather than by counting the whole file: **a shell row** and **Oko's
+     own row**, neither of which carries a `file` key on the line read for them, and **a Helix row
+     whose status line cannot be matched** — `:qa!`, then
+     `hx -c /tmp/oko-10-nostatus.toml /tmp/oko-10.txt`, which reads plain `hx` in the table
+     (Phase 9, check 5) and must carry `"job":"hx"` with no `file` key here.
+  4. **`:new` clears a file that was there.** `:qa!`, then `hx /tmp/oko-10.txt` → a line
+     carrying `"file":"oko-10.txt"`. **Then** `:new` → a line carrying `"job":"hx"` and no
+     `file`. **The order is the check**: run from check 3's unmatchable Helix instead, `:new`
+     answers "no status line found", `file` was never set, and the check passes without ever
+     exercising `Open::NoFile`.
+  5. **The installed panex-tui still draws its cards.** `cargo install --path .`, then run
+     `panex` and press `O` for the card view — the key is bound only when `oko --version`
+     answers on `PATH`, which is why the install comes first. Every row renders as it did
+     before, ignoring the key it does not know. **This is the check §2.18's whole argument
+     rests on**, and it is run against the **installed** build rather than a rebuilt consumer:
+     a panex recompiled against the new schema proves nothing about the one a user has. Quit
+     the card view before check 8.
+  6. **The header still says 1.** `head -1 /tmp/oko-10.jsonl` reads
+     `{"oko":"<version>","schema":1}`. Named as a check because a schema bump is the natural
+     reflex and check 5 is the only other thing that would catch it.
+  7. **A one-shot command subscribes no screen — and this is checked by reading the code, not
+     the log.** `grep -n 'track_helix' src/main.rs src/follow.rs` shows **exactly two calls**,
+     in the dashboard branch and the stream branch, neither inside `parse_command`'s path.
+     **Lines and calls are not the same count here**: if the corrected comment in
+     `src/main.rs:run` names the method, the grep prints three lines of which two are calls,
+     and the criterion is the calls either way. **Stated as a code check because no runtime check exists**: a
+     one-shot never enters `Watcher::run`, which is the only caller of `read_due_screens`, so
+     `~/.oko/reads.log` is unchanged by `oko --activate` in *every* build including a wrong
+     one — and Phase 9's check 9 already recorded that a stray subscription is invisible to the
+     log and the screen alike. A runtime form of this check would be worse than none: it could
+     only ever fail falsely, since `--activate` fronts A's tab and that redraw is a real screen
+     update for the two watchers that *are* subscribed.
+  8. **The reads double, measured as a comparison and not against a literal.** `:qa!` in A,
+     then `hx /tmp/oko-10.txt` — check 4 left A on a scratch buffer — and with the card view
+     closed, **two legs, same method**:
+     - **Leg 1, stream uninstrumented.** Wait 3 s after opening A's file, so its own
+       `Due::AtOnce` read lands before the baseline rather than just after it — the same race
+       leg 2 waits out. `wc -l ~/.oko/reads.log`; in A, `:open /tmp/a.txt`,
+       `:open /tmp/b.txt`, `:open /tmp/c.txt`, pausing a second between them; wait 3 s;
+       `wc -l`. Call the growth **N** — 3 at a typing rate that keeps each command inside the
+       2 s ceiling, 4–5 with a stray (Phase 9's dated note, on why a stray is expected rather
+       than a defect), and 6 from a runner slow enough that each command earns a ceiling read
+       of its own.
+     - **Leg 2, both instrumented.** Restart **the stream pane only** with
+       `OKO_DEBUG_READS=1 ./target/debug/oko --follow >> /tmp/oko-10.jsonl` — the dashboard is
+       not restarted — wait 3 s so the restart's own `Due::AtOnce` read lands *before* the
+       baseline rather than inside the measurement, then `wc -l ~/.oko/reads.log` and repeat
+       exactly. Both watchers write the same fixed read log, so it grows by twice what leg 1
+       grew by — **the literal is deliberately not stated here**, because a runner who stops at
+       one would fail a correct slow run that reaches 12. **`>>` and not `>`**: check 3's grep is evaluated at the end of the gate, and a
+       truncating restart would sweep only post-restart lines — the three row kinds check 3
+       names would be gone and the grep would return 0 over a file that never held them. The
+       capture then carries two streams and so two header lines, which is why check 6 reads
+       `head -1`.
+     Call leg 2's growth **M**. **The criterion is `M ≈ 2N`, within ±2 — a ratio and not a
+     literal**, which is what "measured as a comparison" has to mean if it is to survive the
+     runner. One read per switch per instrumented watcher gives N=3 and M=6; a slower runner
+     earns a ceiling read per command in **both** legs and gets 6 and 12, and the ratio holds
+     where a fixed range would have failed a correct build. **The build being told apart is the
+     one whose stream never reads, and it gives `M = N`** — which no literal range can
+     distinguish from a correct build measured at an unknown typing rate. Phase 9's dated note
+     is the same lesson one level up: the invariant is a rate, not a count. **One stray costs
+     two reads in leg 2 and one in leg 1**, so an unlucky pair can push the difference past ±2;
+     that is a re-run, which any counting gate needs and which the disjointness of `M = N` from
+     `M ≈ 2N` makes safe to repeat. **This deliberately reverses Phase 5's gate**, which required `--follow` to run
+     *without* `OKO_DEBUG_EMITS` so that one log meant one watcher; here two watchers sharing
+     one log is the quantity being measured, and leg 1 is what keeps it interpretable.
+  9. **An idle Helix still costs nothing, twice over.** Phase 5 check 1's preconditions apply:
+     nothing running in a watched pane, no Claude row within a minute of an age bucket, and 3 s
+     to let the last read land. Then 60 seconds untouched: `~/.oko/reads.log` **unchanged**, and
+     `/tmp/oko-10.jsonl` gains **no non-blank line** — non-blank only, since the keepalive
+     counts against any build (Phase 9's dated note).
+  10. **`cargo test` is green**, `cargo clippy --all-targets -- -D warnings` is clean, and
+      `spec-lint --strict` passes. **Per-binary counts measured at HEAD first, because the
+      baseline moved after Phase 9's close-out**: `oko` 48, `oko-probe` 25, `oko-hook` 17
+      today, and none of them moves. The stream's own test gains the presence half **in the
+      test that has a job-bearing row** — `a_row_without_one_carries_the_job_verbatim`, via
+      `plain_row(Some("hx"))` with a file set — while Phase 9's absence assertion **stays where
+      it is and stays as it is**: it sits in `a_row_with_a_status_carries_claude_and_no_job`,
+      whose fixture is a status-bearing row that must keep carrying no `file` under this
+      phase's own rule. **That fixture's deliberately impossible `file` is what forces the
+      condition to be "the job is `hx`" rather than "`file` is set"**, and only the unit test
+      can tell those two implementations apart.
+- **Close-out.** **Reconciliation.** `rules/follow-stream.md` gains `file` in its schema table
+  and a line on its conditional presence, and it sits at **87/88** — so **the cut is named
+  here rather than deferred**: the `--version` paragraph's last sentence, which repeats what
+  `rules/session-commands.md` already says about a stale build falling through to the
+  dashboard. `rules/helix-file.md` loses "only the dashboard reads" and gains what replaces it,
+  within its 110 cap — **and its frontmatter `covers` ends on that same retired clause**, which
+  is the regeneration target `/sync-rules` aims at, so the frontmatter moves with the body.
+  `rules/INDEX.md` is regenerated, because it reprints both `covers` and the line counts.
+  `README.md`'s "Reading the rows from another program" section gains the field. **§2.17 gets a
+  dated note**, on both the "three things this deliberately does not do" list this phase's
+  field opens and the "only the dashboard reads" paragraph §2.18 narrows — **and so does
+  OQ-12**, whose live text states the general rule this phase reverses ("adding a field a
+  consumer must ignore is not a compatible extension…"), following the precedent OQ-12's own
+  resolution set when it put a dated note on OQ-7. §2.13's contract sentence is re-read and the
+  expected answer is "no change" — the shape of the coupling does not move, only its payload.
+  The spec's `note` and `CLAUDE.md`'s observable line are re-read with the expected answer **no
+  change**: the dashboard already shows the file, and this phase adds no observable.
+  **`specs/INDEX.md` is regenerated regardless of the `note`** — writing this phase's `shipped`
+  date makes every phase shipped, which flips the derived rollup from `partial` back to `done`
+  by §1.1, and `spec-lint` excludes both indexes from its own checks so nothing else would
+  catch the staleness. Commit plan: **on `main`, no branch and no PR**, as Phase 9 took — the
+  stream change and the switch first, then the test and the corrected comments, then rules,
+  README and the dated notes. **One push.**
