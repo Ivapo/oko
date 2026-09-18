@@ -105,10 +105,12 @@ built-in one, which is what lets two Oko instances see one name with no protocol
 them.
 Subscriptions deliver `NOTIFY_ON_VARIABLE_CHANGE` (per session *and* variable),
 `NOTIFY_ON_NEW_SESSION`, `NOTIFY_ON_TERMINATE_SESSION`, `NOTIFY_ON_LAYOUT_CHANGE`.
-Oko subscribes `path`, `jobName` and `user.okoName` per session (`ROW_VARS`), plus layout
-and new-session. A
-session created after subscribing is not covered by the per-session ones, so it must be
-subscribed when its notification arrives. **The two variables have different latencies.**
+`NOTIFY_ON_SCREEN_UPDATE` takes a session and carries only its id; the screen comes from
+`GetBufferRequest` with `screen_contents_only` (`helix-file.md`).
+
+Oko subscribes `path`, `jobName` and `user.okoName` per session (`ROW_VARS`), plus layout and
+new-session. A session created after subscribing is not covered by the per-session ones, so it
+must be subscribed when its notification arrives. **The two variables have different latencies.**
 `jobName` is poll-driven: a 5.000 s `sleep` produced its two notifications 5.602 s apart.
 `path` is pushed on the `cd` itself — observed immediate to the eye, watching a pane and
 the table side by side (2026-08-15).

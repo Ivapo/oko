@@ -4,14 +4,15 @@
 doing — and jumps to the one you press Enter on.
 
 ```
- Oko — window 0                                                    5 rows
+ Oko — window 0                                                    6 rows
  ────────────────────────────────────────────────────────────────────────
    tab  name             process   status          where
  ▸ 1    api work         claude    ● waiting >10m  ~/dev/main/oko
    2    spec-driven-dev  claude    ◐ working       ~/dev/main/spec-driven-dev
    3    mdview           claude    ◌ stale >30m    ~/dev/main/mdview
    3    spec-driven-dev  zsh                       ~/dev/main/spec-driven-dev
-   4    oko              oko                       ~/dev/main/oko
+   4    src              hx ui.rs                  ~/dev/main/oko/src
+   5    oko              oko                       ~/dev/main/oko
  ────────────────────────────────────────────────────────────────────────
  ↵ jump    ↑↓ select    r rename    q quit
 ```
@@ -26,6 +27,15 @@ they do not. Un-named, a row shows the last component of its directory and follo
 because that is a description of where it is rather than a name. Press `r` to give it a real
 one; that sticks through any later `cd`, and lives on the iTerm2 session, so it survives
 restarting Oko and dies with the pane.
+
+**A Helix tab names its file.** Three editors read `hx`, `hx`, `hx`, and what tells them
+apart is the file each has open — so a row whose job is `hx` reads `hx ui.rs` in the
+`process` column, following Helix through `:open`, the file picker and a buffer switch.
+Nothing reports that file, so Oko reads one line of the pane's screen: **its status line,
+and the default one.** Move or remove the mode or position elements of
+`[editor.statusline]`, rename the modes, or turn gutters off, and the row reads plain `hx`
+with no file — absent rather than wrong, which is the one thing this is built to guarantee.
+No other editor is covered, and nothing else of the screen is read or shown.
 
 The `status` column is the reason the tool exists: with three agents running, it says which
 one is blocked without your visiting all three.
@@ -180,9 +190,10 @@ thing, and exits; a failure is a non-zero status and one line on stderr. Details
 Claude session from here — no sending prompts, no answering permission requests. It
 observes tabs you opened.
 
-For a plain tab the `process` column shows iTerm2's `jobName` verbatim — the *deepest*
-foreground job, truncated to 16 bytes, so `rust-analyzer-proc-macro-srv` reads as
-`rust-analyzer-pr`. That column is a display value and never an identity test: a row says
+For a plain tab the `process` column shows iTerm2's `jobName` verbatim — the deepest job in
+the pane's *foreground process group*, truncated to 16 bytes, so
+`rust-analyzer-proc-macro-srv` reads as `rust-analyzer-pr`. A Helix pane's language server
+sits outside that group, which is why such a row reads `hx` and can be given a file at all. That column is a display value and never an identity test: a row says
 `claude` because a status file exists for its session, not because of anything a process is
 called.
 
@@ -196,6 +207,9 @@ what `◌ stale` is for.
 ```sh
 oko-probe                       # identity, then the sessions of this window, headless
 oko-probe watch                 # print iTerm2 notifications as they arrive
+oko-probe hx                    # every Helix pane: its job names, its screen, and the
+                                # file Oko reads off it
+oko-probe screen-watch <s>...   # one line per screen update, with the gap
 ```
 
 `oko-probe watch` subscribes to more than the dashboard does, so when something does not

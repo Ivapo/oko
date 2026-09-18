@@ -43,10 +43,14 @@ the glyphs are East-Asian-Ambiguous and score 1. At 13 ratatui truncates silentl
 renders `>10`, so `src/ui.rs`'s test draws the table into a `TestBackend` and asserts the
 cell survives: a correct `Line::width` would not save a layout one cell too narrow.
 
-**The process column is not a source of identity, and never was.** `jobName` is the
-*deepest* foreground job, which for a Claude tab is some descendant — `node` on two
-measured tabs, `rust-analyzer-pr` on two others. What makes a row read `claude` is the
-presence of a status file for its session id (`claude-status.md`), nothing else.
+**The process column is not a source of identity, and never was.** `jobName` is the deepest
+job in the session's *foreground process group* — some descendant for a Claude tab (`node`,
+`rust-analyzer-pr`, `caffeinate` on measured tabs), but `hx` for a Helix pane, whose language
+server sits outside that group and which `deepestJob` alone descends into. What makes a row
+read `claude` is a status file for its session id (`claude-status.md`), nothing else.
+
+**One row type reads two words.** A row with no status whose `jobName` is `hx` reads
+`hx <file>` — the file open in that Helix pane, cut by the same 17 cells (`helix-file.md`).
 
 A session missing `path` or `jobName` renders `-` in that cell rather than an empty or
 omitted row. A row with no status renders **empty** there instead: a plain tab has no
