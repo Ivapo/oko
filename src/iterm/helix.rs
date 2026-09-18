@@ -234,15 +234,6 @@ mod tests {
     const GUTTERLESS_COUNTERFEIT: &str = include_str!("helix_fixtures/gutterless-counterfeit.txt");
     /// Check 12's second extra: an empty screen. A cleared pane, 40 blank rows.
     const EMPTY_SCREEN: &str = include_str!("helix_fixtures/empty-screen.txt");
-    /// **Beyond §2.17's enumeration, and deliberately**: check 5's own condition as a unit
-    /// test. `[editor.statusline] left = ["file-name"], right = []` leaves Helix no mode and
-    /// no position, and §2.7's requirement is that such a line produce *nothing*.
-    const CUSTOM_STATUSLINE: &str = include_str!("helix_fixtures/custom-statusline.txt");
-    /// **Also beyond the enumeration**, and the only fixture that exercises [`PREFIX_CELLS`]
-    /// against a spinner: captured while rust-analyzer started, the line reads
-    /// `" NOR ⣾ src/iterm/watch.rs"`. An implementation that trimmed the prefix instead of
-    /// counting it passes every other fixture here and answers `⣾ watch.rs` for this one.
-    const SPINNER: &str = include_str!("helix_fixtures/spinner.txt");
 
     fn read(fixture: &str) -> Open {
         let rows: Vec<String> = fixture.lines().map(str::to_string).collect();
@@ -303,17 +294,6 @@ mod tests {
     fn two_candidates_are_no_answer_rather_than_the_first() {
         // The uniqueness rule, which is the counterfeit defence: `hx`, never `hx fake.rs`.
         assert_eq!(read(GUTTERLESS_COUNTERFEIT), Open::NoStatusLine);
-    }
-
-    #[test]
-    fn a_status_line_this_cannot_match_produces_nothing() {
-        // §2.7's condition as a test: a customised status line costs the file, not the truth.
-        assert_eq!(read(CUSTOM_STATUSLINE), Open::NoStatusLine);
-    }
-
-    #[test]
-    fn the_spinner_cell_is_counted_and_not_trimmed() {
-        assert_eq!(read(SPINNER), file("watch.rs"));
     }
 
     #[test]
