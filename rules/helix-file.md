@@ -7,8 +7,8 @@ sources:
 covers: >
   what a Helix tab has open and how Oko knows — the gate on `jobName`, the screen
   subscription, the quiet window and the ceiling, the left-edge anchor and its uniqueness
-  rule, the three answers and what each does to a row, that only the dashboard reads, and
-  what the stream does not carry
+  rule, the three answers and what each does to a row, which two entry points read, and what
+  the stream carries
 max_lines: 110
 generated: 2026-09-17
 ---
@@ -103,16 +103,18 @@ cell and a dead watcher would cost every row.
 `rescan`, so a layout change does not blank every Helix row, and a job that stops being `hx`
 is unsubscribed and its file cleared in the same pass.
 
-## Only the dashboard reads, and the stream says nothing
+## Two readers, and what the stream carries
 
 `src/iterm/watch.rs:Watcher::track_helix` is called from `src/main.rs:run`'s dashboard branch
-alone. `--follow` does not publish the file, so its reads would be pure cost, and a one-shot
-command would pay a subscription per Helix pane to send one request and exit.
+and from `src/follow.rs:run`, and from **neither one-shot command**: `--activate` and
+`--set-name` connect, act and exit without subscribing any screen, which would cost a round trip
+per Helix pane in order to send one request.
 
-`src/follow.rs:row_json` carries no file field (`rules/follow-stream.md`), so a file switch
-builds a snapshot whose serialized line matches the last one sent and the stream suppresses
-it. The dashboard's `process` cell is where the value appears, as `hx <file>`
-(`rules/dashboard-ui.md`).
+`src/follow.rs:row_json` publishes `file` on a row whose job is `hx` (`rules/follow-stream.md`),
+so a file switch is a line on the stream rather than one it suppresses; the table draws the same
+value in its `process` cell, as `hx <file>` (`rules/dashboard-ui.md`). A dashboard and a
+`--follow` in one window subscribe the same panes and each takes its own reads, so the round
+trips double — cost, not incorrectness, each bounded by its own window and ceiling.
 
 ## What it costs
 

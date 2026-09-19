@@ -1045,6 +1045,24 @@ the line lands the same way, and that is §2.7's version-less-UI risk, taken her
 failure is absence and because the parser's fixtures, captured from a real Helix, are where a
 reshaped line shows up first.
 
+**CORRECTED 2026-09-19 (Phase 10, which retires two of this section's claims).** Two things
+above are false where they stand, and §2.18 is the argument for both.
+
+- **"Only the dashboard reads"** is now the dashboard *and* `--follow`.
+  `src/iterm/watch.rs:Watcher::track_helix` is called from the stream's branch too, because that
+  paragraph rested on a premise this phase removes: reads were pure cost for the stream *because
+  the stream published nothing*. **The rest of the paragraph is untouched and still the rule** —
+  neither one-shot command subscribes a screen, for exactly the reason given there.
+- **The first of the "three things this deliberately does not do"** — publish the file on
+  `--follow` — is the thing Phase 10 does, on the trigger that bullet itself named: no consumer
+  had asked, and one has. It is a new key under `schema: 1` rather than the `schema: 2` the
+  bullet predicted, which is §2.18's crux rather than a detail of it, and the sentence about a
+  file switch serializing to the line already sent goes with it — such a switch is now a line.
+
+Both are left as written because they record what Phase 9 shipped and why, and a reader meeting
+them needs to know which half survived. The other two bullets of that list — no `[+]`, and no
+editor but `hx` — are unmoved, and Phase 10 inherits them rather than re-arguing them.
+
 ### 2.18 The file on the stream, and what a key costs a consumer (decision, recorded — added by Phase 10)
 
 §2.17 declined to publish the Helix file on `--follow`, in one sentence with one reason: "a
@@ -1535,6 +1553,19 @@ re-arguing them: no `[+]`, no path — the base name and nothing else — and no
   invariant rather than unstable, and OQ-7's resolution carries a dated `CORRECTED` note —
   it had borrowed OQ-2's within-session evidence, which was measured on a *non-Claude* pane,
   onto Claude rows it does not reach. OQ-2 itself is correct as written and untouched.
+
+  **CORRECTED 2026-09-19 (Phase 10, on the live text below rather than on the resolution).**
+  The original question's last sentence states a general rule — "adding a field a consumer must
+  ignore is not a compatible extension when the consumer's contract is 'a header you do not
+  recognise draws nothing'" — and **Phase 10 reverses it** (§2.18). The reversal is measured
+  rather than argued: panex-tui's `Row` carries no `deny_unknown_fields`, so an unknown key is
+  dropped and the card view goes on drawing, while a `schema: 2` would blank that view until the
+  consumer shipped its half — spending a working view to add one optional key. So `schema` names
+  what a consumer must understand *in order to draw a row*, and a bump is reserved for a change
+  that makes an old reader **wrong**: a field renamed, a meaning moved, a row shape changed.
+  **The resolution above is untouched** — still no `job` beside a status, and still no schema 2
+  for it. Noted here rather than left to be met cold, following the precedent this question's
+  own resolution set when it put a dated note on OQ-7.
 
   *(design call, and it needs a measurement nobody has taken — blocks a schema 2; ~~it is why a
   consumer cannot draw a process and a status on one card~~)* Today the two are exclusive: `src/follow.rs:row_json`

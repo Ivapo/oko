@@ -6,10 +6,10 @@
   how a Claude Code tab reports what it is doing — the hook binary and the events it answers to, the status file's path and format, the identity join to a row, the two clocks a value ages on, what deletes a file, and the holes that remain
 - **[dashboard-ui](dashboard-ui.md)** — generated 2026-08-16 · 4 sources · 118/118 lines
   the dashboard Oko draws — its columns and where each value comes from, the keys it answers to, the one modal state it has, how a selection survives a changing row set, and the path by which rows track the window without polling
-- **[follow-stream](follow-stream.md)** — generated 2026-08-16 · 3 sources · 87/88 lines
+- **[follow-stream](follow-stream.md)** — generated 2026-08-16 · 3 sources · 88/88 lines
   the JSON stream `oko --follow` writes — its header and schema, the shape of a line and where each field comes from, what it deliberately omits, the rule that keeps it quiet, the keepalive and the three ways the process ends
-- **[helix-file](helix-file.md)** — generated 2026-09-17 · 3 sources · 108/110 lines
-  what a Helix tab has open and how Oko knows — the gate on `jobName`, the screen subscription, the quiet window and the ceiling, the left-edge anchor and its uniqueness rule, the three answers and what each does to a row, that only the dashboard reads, and what the stream does not carry
+- **[helix-file](helix-file.md)** — generated 2026-09-17 · 3 sources · 110/110 lines
+  what a Helix tab has open and how Oko knows — the gate on `jobName`, the screen subscription, the quiet window and the ceiling, the left-edge anchor and its uniqueness rule, the three answers and what each does to a row, which two entry points read, and what the stream carries
 - **[iterm-api](iterm-api.md)** — generated 2026-08-16 · 3 sources · 115/115 lines
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables it reads, writes and watches, the operations and the subscriptions
 - **[session-commands](session-commands.md)** — generated 2026-08-16 · 2 sources · 71/72 lines

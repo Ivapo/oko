@@ -24,8 +24,7 @@ error. The whole contract is that a binary named `oko` may be on `PATH`, and wha
 plus `oko --version`, first of the branches answered ahead of the connection
 (`src/main.rs:run`), because presence is not capability: a build predating this mode falls
 through to the dashboard, and on a pipe that path panics inside `ratatui::init()` rather
-than reporting anything. Such a build is exactly what the probe catches — a *current* Oko
-refuses an unknown flag with exit 2 instead.
+than reporting anything.
 
 ## The header
 
@@ -50,8 +49,10 @@ sorted, which is what makes the suppression rule below a string comparison.
 | `age` | `">5m"`, `">10m"`, `">30m"`, `">1h"`, or `null` under five minutes |
 | `claude` | `true`, **present only** on a row carrying a status |
 | `job` | `jobName` verbatim, **present only** on a row without one. 16-byte truncation and all |
+| `file` | a Helix file's base name, **present only** where `job` is `hx` and a status line has been read |
 
-`claude` and `job` are exclusive, and that is the interface (`src/follow.rs:row_json`).
+`claude` and `job` are exclusive; `file` is the third conditional key (`src/follow.rs:row_json`),
+and it arrived under **`schema: 1`** — a key an old consumer ignores does not make it wrong.
 
 **Three things the schema does not do.** `age` is the bucket and never seconds. `status` is
 the **effective** value, `stale` included, because that one is derived at read time from two

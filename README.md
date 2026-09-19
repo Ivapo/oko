@@ -145,11 +145,12 @@ Enter changes which tab is focused and nothing else: nothing is typed into the t
 oko --follow          # newline-delimited JSON on stdout, no terminal involved
 ```
 
-The first line names the build and the schema — `{"oko":"0.2.0","schema":1}` — and every line
+The first line names the build and the schema — `{"oko":"0.3.0","schema":1}` — and every line
 after it is one snapshot: `window_number`, and a `rows` array carrying `session_id`, `tab`,
 `name`, `path`, `status` and `age`, plus `claude: true` for a Claude row or `job` for a plain
-one. Ages are the same buckets the table shows, never a second count, and a line identical to
-the one before it is not written, so the stream is as quiet as the dashboard is.
+one, and `file` — the open file's base name — on a row whose `job` is `hx`. Ages are the same
+buckets the table shows, never a second count, and a line identical to the one before it is not
+written, so the stream is as quiet as the dashboard is.
 
 **Three promises to a consumer.** It opens with the current state rather than waiting for
 something to move; a `schema` you do not recognise means show nothing rather than a half-drawn
