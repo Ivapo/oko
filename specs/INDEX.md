@@ -2,5 +2,5 @@
 
 # Specs
 
-- **[tab-dashboard](tab_dashboard_spec.md)** — `oko-001` · accepted · partial
+- **[tab-dashboard](tab_dashboard_spec.md)** — `oko-001` · accepted · done
   The iTerm2 dashboard tab — live per-tab directory, process, the file open in a Helix tab and Claude Code status for every tab in the window, with Enter to jump to the selected one.
