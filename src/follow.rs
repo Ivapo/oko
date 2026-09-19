@@ -24,7 +24,7 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use crate::iterm::{Cmd, Event, Row, Snapshot, Watcher};
+use crate::iterm::{Cmd, Event, Row, Snapshot, Watcher, helix};
 use crate::status::Age;
 
 /// The schema a consumer must recognise, carried once per stream (OQ-9).
@@ -52,7 +52,13 @@ pub fn run(advisory_name: &str) -> Result<()> {
     // Connect **before** anything reaches stdout: "the API is off" is a message for a human,
     // and a stream whose header had already gone out would be promising a protocol it cannot
     // speak. Stdout stays empty on this failure and the message goes to stderr, via `main`.
-    let watcher = Watcher::connect(advisory_name)?;
+    let mut watcher = Watcher::connect(advisory_name)?;
+    // **The stream reads screens too** (§2.18), which is what lets `row_json` publish a file at
+    // all. Phase 9 confined this to the dashboard on a premise this phase removes — reads were
+    // pure cost *because the stream published nothing*. Neither one-shot command gains it:
+    // `--activate` would still pay a subscription round trip per Helix pane to send one
+    // request and exit, and it still refuses to.
+    watcher.track_helix();
 
     let mut stream = Stream::new(io::stdout());
     stream.header()?;
@@ -188,6 +194,16 @@ fn snapshot_line(snapshot: &Snapshot) -> String {
 /// *plain* pane, where the deepest job does churn; OQ-7 borrowed it onto Claude rows, where it
 /// does not hold.) A row *without* a status carries `job` verbatim, 16-byte truncation and
 /// all, because there it is the value and the only one.
+///
+/// **`file` is a third conditional key, and it arrives under `schema: 1`** (§2.18). It is
+/// present only on a row whose job is `hx` and whose screen has been read into a file name —
+/// the same shape `job` and `claude` already have, and the same one a consumer is already
+/// written for. **The condition is the job and never `file.is_some()`**: a row carrying a
+/// status is never Helix, so both spellings agree on every live row and only
+/// `a_row_with_a_status_carries_claude_and_no_job`'s impossible fixture tells them apart. No
+/// schema bump, because a key an old consumer ignores does not make it wrong — panex-tui's
+/// `Row` has no `deny_unknown_fields` and goes on drawing — while `schema: 2` means *stop
+/// drawing* and is reserved for a change that makes an old reader wrong.
 fn row_json(row: &Row) -> serde_json::Value {
     let mut value = json!({
         "session_id": row.session_id,
@@ -200,6 +216,9 @@ fn row_json(row: &Row) -> serde_json::Value {
     match row.status {
         Some(_) => value["claude"] = json!(true),
         None => value["job"] = json!(row.process),
+    }
+    if row.process.as_deref() == Some(helix::JOB_NAME) && let Some(file) = &row.file {
+        value["file"] = json!(file);
     }
     value
 }
