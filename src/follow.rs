@@ -244,7 +244,9 @@ mod tests {
             process: Some("node".to_string()),
             path: Some("/Users/me/dev/main/oko".to_string()),
             stored_name: Some("api work".to_string()),
-            // Set, and deliberately unpublished: `row_json` carries no file (§2.17).
+            // Set on a row whose job is `node`, and so deliberately unpublished (§2.18).
+            // **The impossible fixture is the point**: no live Claude row carries a file, so
+            // this is the only thing that tells a `file`-keyed condition from a job-keyed one.
             file: Some("main.rs".to_string()),
             name: Some("api work".to_string()),
             status: Some(shown),
@@ -285,9 +287,9 @@ mod tests {
         // Not `null` — *absent*. The row's `jobName` is `node`, which is never displayed, is
         // no identity test, and moves on its own (OQ-7).
         assert!(row.get("job").is_none(), "{row}");
-        // **Phase 9's field is not published either** (§2.17). This row's `file` is set, and
-        // the schema carries no trace of it — which is what makes a Helix file switch build a
-        // snapshot whose line matches the last one sent, and so a line the stream suppresses.
+        // **And no `file`, though this row has one** (§2.18). The schema publishes it only
+        // where the job is `hx`, which a row carrying a status never is — so the fixture above
+        // is the one row on which the job-keyed condition and a `file.is_some()` one disagree.
         assert!(row.get("file").is_none(), "{row}");
         assert_eq!(row["status"], "waiting");
         assert_eq!(row["age"], ">10m");
@@ -312,6 +314,23 @@ mod tests {
         // What Oko knows, not what the table draws: no `-`, no `~`, no truncation.
         assert_eq!(row["path"], "/Users/me/dev/main");
         assert!(line_of(vec![plain_row(None)])["rows"][0]["job"].is_null());
+
+        // **A Helix row carries `file` beside it** (§2.18), under the same `schema: 1` — the
+        // base name and nothing else, no path and no `[+]`.
+        let mut editing = plain_row(Some("hx"));
+        editing.file = Some("main.rs".to_string());
+        let value = line_of(vec![editing]);
+        let row = &value["rows"][0];
+        assert_eq!(row["file"], "main.rs");
+        assert_eq!(row["job"], "hx");
+
+        // A Helix pane whose status line has never matched: `job` and **no `file` key**, not a
+        // null. That pair is how a consumer tells it from a row that is not Helix at all,
+        // which is the same absence the dashboard draws as plain `hx`.
+        let value = line_of(vec![plain_row(Some("hx"))]);
+        let row = &value["rows"][0];
+        assert_eq!(row["job"], "hx");
+        assert!(row.get("file").is_none(), "{row}");
     }
 
     #[test]

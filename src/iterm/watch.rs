@@ -98,8 +98,9 @@ pub struct Row {
     ///
     /// **`None` is two different things on purpose** — a row that is not Helix, and a Helix
     /// row whose screen has never matched a status line — and both draw plain `hx`.
-    /// `src/follow.rs:row_json` does not publish it (§2.17), so a file switch serializes to
-    /// the line already sent and the stream suppresses it.
+    /// `src/follow.rs:row_json` publishes it on a row whose job is `hx` (§2.18), so a file
+    /// switch is a line on the stream rather than one it suppresses — and a consumer tells the
+    /// two `None`s apart by `job` alone, exactly as the table does.
     ///
     /// [`path`]: Row::path
     /// [`name`]: Row::name
@@ -226,9 +227,9 @@ pub struct Watcher {
     /// window and comes back is still subscribed — resubscribing it would be a second
     /// notification for every change.
     subscribed: HashSet<(String, &'static str)>,
-    /// Whether the dashboard turned Helix tracking on. **Off until it does** (§2.17):
-    /// `--follow` publishes no file, so its reads would be pure cost, and a one-shot command
-    /// would pay a subscription round trip per Helix pane to send one request and exit.
+    /// Whether tracking was turned on. **Off until it is** (§2.18): the dashboard and
+    /// `--follow` both turn it on, because both have somewhere to put the file, and a one-shot
+    /// command would pay a subscription round trip per Helix pane to send one request and exit.
     tracking_helix: bool,
     /// Sessions subscribed to `NOTIFY_ON_SCREEN_UPDATE`, and therefore **attempted exactly
     /// once each**: the entry is made whether or not iTerm2 accepted, so a session it refuses
@@ -267,8 +268,8 @@ impl Watcher {
             window_number: None,
             rows: Vec::new(),
             subscribed: HashSet::new(),
-            // Off here and turned on by the dashboard alone, so the `rescan` below subscribes
-            // no screen and the first snapshot carries no file.
+            // Off here and turned on by the dashboard and the stream, so the `rescan` below
+            // subscribes no screen and the first snapshot carries no file.
             tracking_helix: false,
             screen_subscribed: HashSet::new(),
             due_reads: HashMap::new(),
@@ -308,11 +309,11 @@ impl Watcher {
 
     /// Starts tracking what Helix panes have open (§2.17).
     ///
-    /// **The dashboard calls this and nothing else does.** [`Watcher::connect`] is shared by
-    /// the dashboard, `--follow` and both one-shot commands (`src/main.rs:run`), and only one
-    /// of the four draws a file: the stream does not publish it, so its reads would be pure
-    /// cost, and a one-shot command would pay a subscription round trip per Helix pane in
-    /// order to send one request and exit.
+    /// **The dashboard and `--follow` call this; the one-shot commands do not.**
+    /// [`Watcher::connect`] is shared by all four (`src/main.rs:run`), and two of them have
+    /// somewhere to put the file: the table's process cell, and the stream's `file` key
+    /// (§2.18). `oko --activate` and `oko --set-name` have neither, and would pay a
+    /// subscription round trip per Helix pane in order to send one request and exit.
     ///
     /// It sweeps the rows that already exist, so a Helix pane running before Oko started is
     /// subscribed and read exactly as one that arrives later is.

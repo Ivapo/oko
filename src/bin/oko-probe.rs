@@ -307,8 +307,9 @@ const HX_VARS: [&str; 4] = ["jobName", "deepestJob", "commandLine", "terminalWin
 /// The two forms are one command because they answer one question at two altitudes. The
 /// report is for a human asking why a row says what it says; the bare rows are how a parser
 /// fixture is captured, byte for byte, which a report can never be. The operand deliberately
-/// accepts **any** session, not only a Helix one: pointed at Oko's own pane it is the only
-/// oracle there is for what the dashboard actually drew, since the stream publishes no file.
+/// accepts **any** session, not only a Helix one: the stream carries a file only for a row
+/// whose job is `hx` (§2.18), so pointed at a pane that is not one — Oko's own, a shell — this
+/// is still the only oracle there is for what a screen actually holds.
 fn hx(session: Option<&str>) -> Result<()> {
     let mut client = connect()?;
 
