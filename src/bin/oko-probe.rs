@@ -249,10 +249,13 @@ fn watch() -> Result<()> {
 
     println!("── subscriptions ────────────────────────────────────────────────────────");
     for p in placed.iter().filter(|p| p.window_id == me.window_id) {
-        for name in ["path", "jobName"] {
+        // `commandLine` is not a row variable: it is what an mdview row's file is derived
+        // from (§2.19), and watching it here is how OQ-17 — does iTerm2 post a change of it
+        // at all, and in what order against `jobName` — is measured and re-measured.
+        for name in ["path", "jobName", "commandLine"] {
             client.watch_variable(&p.session_id, name)?;
         }
-        println!("watching path + jobName on tab {} · {}", p.tab, p.session_id);
+        println!("watching path + jobName + commandLine on tab {} · {}", p.tab, p.session_id);
     }
     for notification in [
         NotificationType::NotifyOnNewSession,
