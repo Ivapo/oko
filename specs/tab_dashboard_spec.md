@@ -6,7 +6,7 @@ note: >
   and Claude Code status for every tab in the window, with Enter to jump to the selected
   one.
 status: accepted
-last_updated: 2026-09-17
+last_updated: 2026-09-20
 
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
@@ -57,6 +57,11 @@ phases:
   - name: "Phase 10 — the Helix file on the stream"
     reviewed: 2026-09-17
     shipped: 2026-09-19
+    cut: null
+    by: null
+  - name: "Phase 11 — what an mdview tab has open"
+    reviewed: 2026-09-20
+    shipped: null
     cut: null
     by: null
 
@@ -1143,6 +1148,176 @@ that are being edited.
 **Three things this deliberately does not do**, inheriting §2.17's boundaries rather than
 re-arguing them: no `[+]`, no path — the base name and nothing else — and no editor but `hx`.
 
+### 2.19 What an mdview tab has open (decision, recorded — added by Phase 11)
+
+mdview is a terminal markdown reader — the crate `mdview-tui`, by this project's author, 0.6.0
+installed on this machine — and every tab running it reads `mdview`. **That is §2.17's argument
+once more**: the word on the row is the same for every such tab, and the file each has open is
+what tells them apart. The author asked for it on 2026-09-20, after seeing the Helix file on
+the dashboard and on panex-tui's cards.
+
+**What makes this a different decision from §2.17 is one fact about mdview: it holds one file
+for its whole life.** Its argument parser takes exactly one operand, refuses a second, and
+refuses anything beginning with `-` except its own three flags, each of which prints and exits.
+Nothing inside it opens another file — a link renders as text, an image goes to the system's
+`open`, and `r` rereads the same path. **So the launch arguments are the open file.** §2.17
+measured `commandLine` and rejected it because Helix moves off its launch arguments — `:open`,
+the picker, `gf` — which is a fact about Helix and not about `commandLine`. The screen is not
+read: no screen subscription, no read of a pane's rows, no parser of a user interface. **§2.7
+is not reopened, because the source is structured** — iTerm2's own record of the process's
+arguments.
+
+**Measured rather than assumed** — 2026-09-20, iTerm2 3.7.2, a scratch window driven over
+AppleScript that polled both variables between keystrokes:
+
+| launched as | `commandLine` read |
+|---|---|
+| `mdview plain.md` | `mdview plain.md` |
+| `mdview ../mdv/plain.md` | `mdview ../mdv/plain.md` |
+| `mdview ./-dash.md` | `mdview ./-dash.md` |
+| `mdview 'with space.md'` | `mdview "with space.md"` |
+| `mdview 'sub dir/nested.md'` | `mdview "sub dir/nested.md"` |
+| `mdview 'two  spaces.md'` | `mdview "two  spaces.md"` |
+| `mdview 'star*.md'` | `mdview "star*.md"` |
+| `mdview "it's.md"` | `mdview "it's.md"` |
+| `mdview 'q"uote.md'` | `mdview 'q"uote.md'` |
+| `mdview 'back\slash.md'` | `mdview 'back\slash.md'` |
+| `mdview 'd$x.md'` | `mdview 'd$x.md'` |
+| `~/.cargo/bin/mdview plain.md` | `mdview plain.md` |
+| `./mdv-link plain.md`, a symlink to it | `mdv-link plain.md` |
+| `(exec -a fakename mdview plain.md)` | `fakename plain.md` |
+
+`jobName` read `mdview` in every row, the last two included. Four facts come out of that, and
+the fourth is the one the mechanism is built around:
+
+1. **`commandLine` is argv with quotes added, not argv joined raw.** An argument carrying
+   whitespace, `'` or `*` is double-quoted; one carrying `"`, `\` or `$` is single-quoted; one
+   carrying none is bare. What iTerm2 writes for an argument needing both kinds of quote is
+   unmeasured, and the parser below is built so that it does not need to know.
+2. **Its first word is argv[0]'s base name, which `jobName` is not.** A full path reads
+   `mdview`; a symlink and `exec -a` read their own names over a `jobName` of `mdview`.
+3. **`commandLine` moves no later than `jobName`.** Across eighteen launches it read the new
+   command before `jobName` read `mdview` in twelve — 33–50 ms earlier where the poll was
+   timed — and in the same sample in the other six, never after; at quit it read `-zsh` while
+   `jobName` still read `mdview`. The poll reads the two
+   one after the other, so what it shows is "no later", not "strictly first".
+4. **`jobName` does not leave `mdview` between two mdviews run back to back.**
+   `for f in plain.md 'with space.md' plain.md; do mdview "$f"; done` and
+   `mdview plain.md && mdview 'with space.md'` both went from one mdview to the next with a new
+   `jobPid` and a new `commandLine` and **no change of `jobName` at all**. So a design that
+   reads `commandLine` when `jobName` becomes `mdview` shows the loop's first file for the rest
+   of the loop — §2.17's failure, reached by another road. `commandLine` moved on every file.
+
+**So `commandLine` is subscribed rather than read at the transition.** The first time a
+session's job is `mdview`, Oko subscribes that session's `commandLine` and **then** reads it
+once, in that order so nothing between them is lost; from then on its notifications keep the
+value current, which is what serves the loop. The subscription is attempted once per session and
+never cancelled, as `rescan`'s are: a pane that ran mdview and went back to a shell sends a
+notification per command it runs, which matches no mdview row and costs no round trip. **A
+session that never runs mdview is never subscribed.** Whether iTerm2 sends
+`NOTIFY_ON_VARIABLE_CHANGE` for `commandLine` at all is OQ-17: everything above was measured by
+polling, not by subscription. **A refused subscribe keeps nothing**: the one read is not
+stored, so that pane reads plain `mdview` for the watcher's life. Storing it would hold the
+pane's first file in a map no notification ever updates, and the next mdview in that pane
+would be derived from it — the one way this design could otherwise name a wrong file.
+
+**The value is held off the row**, in a map on the watcher from session to command line. `Row`
+is what `emit_if_changed` compares, and a command line on it would make every command in a
+subscribed pane an emission; only the `file` derived from it crosses onto the row. **And the
+map is kept for every subscribed session, whether or not it has a row.** A session leaves Oko's
+rows while it stays subscribed — its tab dragged to another window, Oko's own tab dragged, the
+session buried — and `src/iterm/watch.rs:Watcher::apply` answers a variable change for a
+session with no row by returning before any variable is looked at. A command line dropped
+there would be stale when the session came back: it left on `a.md`, `mdview b.md` ran
+elsewhere, and on return the row reads `mdview a.md`. So a `commandLine` notification is stored
+**before** the row is looked up, and only then acted on.
+
+**`file` is a function of `jobName` and `commandLine` and of nothing else**, derived again
+whenever either changes: a job of `mdview` gets the parser's answer; a job that is neither
+`mdview` nor `hx` gets none. **Two answers, not Helix's three.** Helix's "leave it as it was"
+exists because a screen can be covered for a moment; a command line cannot be, so one that does
+not parse is no file, and a previous value is never kept. Any transient — a `-zsh` sampled
+between two files of a loop, a moment in which mdview's `open` child holds the foreground —
+therefore shows as a moment of plain `mdview`, never as the wrong name, and converges on the
+next notification. **One such moment is routine rather than rare**: `jobName`'s notification
+is delivered ahead of `commandLine`'s (OQ-17), so every start after a pane's first shows one
+pass of plain `mdview` before the name.
+
+**And `file` never outlives the job that named it.** Today `src/iterm/watch.rs:Watcher`
+clears `file` only when a job stops being `hx`, which was complete while one job could set it.
+With two, a pane can go from one to the other directly — fact 4 says `jobName` can skip the
+shell between two programs — and a Helix row that inherits mdview's file keeps it until a
+status line is read, **for good if none ever is**. So a `jobName` change clears `file` before
+the new job's mechanism runs. **Measured in this phase's review round, not inferred from fact
+4** — 2026-09-20, `oko-probe watch` over a scratch window: `mdview plain.md; hx b.md` went
+`mdview` → `hx` with no `zsh` between in **3 of 3** runs, and `hx b.md; mdview plain.md` went
+`hx` → `mdview` in **2 of 2**.
+
+**"A change" means the value moved, and nothing else does.** A `jobName` notification whose
+value equals the one held, and `rescan`'s call for a row it is merely confirming, are not job
+changes and clear nothing. The distinction matters for Helix more than for mdview: an mdview
+row cleared by mistake is derived again from the map in the same pass, but a Helix session
+already in the screen subscriptions gets no `Due::AtOnce`, so a Helix row cleared on a layout
+change stays blank until its screen next updates — which an idle Helix never does. That is
+Phase 9's check 7 defect, and this is the restructure that could bring it back.
+
+**The parser answers only from a command line it can read exactly.** A pure function from the
+string to a base name or nothing:
+
+- **It begins with the literal `mdview `** — argv[0]'s base name is `mdview`, and one space
+  follows. A symlink or an `exec -a` name answers nothing: argv[0] may itself contain a space,
+  and only this spelling marks where it ends.
+- **What follows is exactly one argument, in one of three shapes**: bare, containing no
+  whitespace, no quote and no `\`, `$` or backtick; double-quoted, with no `"`, `\`, `$` or
+  backtick inside; or single-quoted, with no `'` inside. **In each shape the text is argv
+  verbatim, because no escape is admitted anywhere.** Anything else — a second argument, or
+  whatever escape iTerm2 uses for an argument that needs both quotes — answers nothing, rather
+  than a name un-escaped by a rule nobody measured.
+- **It does not begin with `-`**. mdview exits on every such argument, so a live one never holds
+  it, and a `mdview --help` caught mid-exit must not read as a file called `--help`.
+- **It contains no control character.** A tab is a legal file-name byte and iTerm2 double-quotes
+  one faithfully, but no table cell can draw it and the stream would carry it raw.
+- **The answer is what follows the last `/`**, and an empty one is nothing.
+
+**What the row shows: `mdview <file>` in the process cell**, as Helix's is `hx <file>`. The
+column keeps its 17 cells, so `mdview ` spends seven and a name over ten is cut —
+`mdview introducti`. That is the cost §2.17 accepted for `hx`, larger here, and stated rather
+than fixed: widening the column is a decision about the table and would reach every row.
+
+**The stream carries it**: `file` on a row whose job is `mdview`, under `schema: 1`, by §2.18's
+argument unchanged — a key an old consumer ignores does not make it wrong. The condition in
+`src/follow.rs:row_json` becomes "the job is one Oko reads a file for", `hx` or `mdview`, and
+**still never "`file` is set"**. The installed panex-tui fills its file slot only on its `hx`
+arm and draws any other job by name, so an mdview card reads `mdview` exactly as it did; showing
+the file there is panex-tui's change to make.
+
+**The switch is renamed, and not widened.** `track_helix` turns on the one mechanism that has
+somewhere to put a file, and its own documentation gives that as the reason: the dashboard and
+`--follow` call it because "two of them have somewhere to put the file". A method named for
+Helix that also subscribes mdview's command line would be the name lying, so it becomes
+`track_files`, and the field `tracking_files`. **Neither one-shot command calls it**, for §2.17's
+reason: `oko --activate` would subscribe the command line of every mdview pane in order to
+send one request. The citations of `track_helix` in §2.17, §2.18 and Phases 9–10 are left as
+written — they are pointers, which the methodology's §6.1 leaves to `rules/`, and they record
+what those phases shipped.
+
+**The coupling this rests on is mdview's behaviour, and it is stated in both repositories.**
+The day mdview can open a second file without exiting — following a link to another `.md` is
+the natural feature — this section is wrong in exactly the way §2.17 said `commandLine` is wrong
+for Helix: right until the first switch and confidently wrong after it, with no rule here able
+to notice. **The remedy then is for mdview to say which file it has open** — an iTerm2 user
+variable set by an escape sequence, which Oko would read as it reads `user.okoName` — and not to
+read its screen. So mdview's own `CLAUDE.md` carries one sentence naming the constraint and
+pointing here, because a change there is the only thing that can break this and nothing on this
+side can see it happen.
+
+**Four things this deliberately does not do.** No scroll position and no path — the base name
+and nothing else. No change to mdview's code: this works with every mdview ever published,
+because the source is iTerm2's rather than mdview's. No other pager or viewer: `less` can
+`:e` another file and `glow` has a file browser, so "one file for life" is a fact to measure per
+program and not a property of readers. And nothing for mdview reached through a symlink or run
+over `ssh`: the first answers nothing by the parser's first rule, the second has job `ssh`.
+
 ## 3. Open questions
 
 - **OQ-1 — How does a Rust binary reach the iTerm2 API?** **RESOLVED 2026-08-14 by Phase
@@ -1730,6 +1905,49 @@ re-arguing them: no `[+]`, no path — the base name and nothing else — and no
   relies on; (d) whether rust-analyzer starting on this repo keeps the screen updating with no
   pause as long as the window — the case the ceiling exists for. The floor is `IDLE_TICK`'s
   100 ms. The ceiling stays 2 s unless (d) gives a reason to move it.
+- **OQ-17 — Does iTerm2 notify a change of `commandLine`, and in what order against
+  `jobName`?** **RESOLVED 2026-09-20, during Phase 11's review round: it does, once per file
+  of the loop, and `jobName`'s notification is delivered first.** Measured with
+  `oko-probe watch`, now subscribing `commandLine`, over a scratch window whose second tab ran
+  §2.19's loop of three files and then one mdview on its own:
+
+  | at | notifications, in delivery order |
+  |---|---|
+  | the loop starts | `jobName` = `mdview`, then `commandLine` = `mdview plain.md`, same ms |
+  | second file | `commandLine` = `mdview "with space.md"` — **no `jobName`** |
+  | third file | `commandLine` = `mdview plain.md` — **no `jobName`** |
+  | the loop ends | `jobName` = `zsh`, then `commandLine` = `-zsh`, same ms |
+  | a single mdview starts | `jobName` = `mdview`, then `commandLine` = `mdview 'q"uote.md'`, same ms |
+  | it quits | `jobName` = `zsh`, then `commandLine` = `-zsh`, same ms |
+
+  **So (a) and (b) hold, and the subscription is sound**: the middle file is a notification of
+  its own with no `jobName` beside it, which is fact 4 of §2.19 seen from the subscriber's side.
+  **(c) is the reverse of what polling suggested**, and what it costs is now known rather than
+  bounded: `src/iterm/watch.rs:Watcher::run` applies one notification per pass and emits after
+  each, so in a pane whose `commandLine` is **already** subscribed, a start's `jobName` pass
+  derives `file` from the previous command line — `-zsh` — and answers nothing; the next pass
+  carries the new command line and the file. **One pass of plain `mdview`, and one stream line
+  with `"job":"mdview"` and no `file` ahead of the one carrying it.** The first start in a pane
+  has no such pass: its subscribe-then-read finds the new value already there, both variables
+  having moved in the same millisecond. A quit is clean either way — the `jobName` pass clears
+  `file`, and the `-zsh` that follows reaches no mdview row. A `ls` run in the same pane posted
+  nothing at all, too short for `jobName`'s poll. *(needs measurement — blocked Phase 11)*
+  §2.19 subscribes `commandLine` because
+  fact 4 there says `jobName` does not move between two mdviews run back to back, and every
+  number in that section was taken by **polling** the variable over AppleScript. Nothing in
+  this repository has ever subscribed `commandLine`, and a variable iTerm2 updates without
+  posting a change would leave the loop showing its first file — the failure the subscription
+  exists to prevent. Settle it in Phase 11's review round, as OQ-15 and OQ-16 were settled in
+  Phase 9's: add `commandLine` to what `oko-probe watch` subscribes (`src/bin/oko-probe.rs`,
+  beside `path` and `jobName`), run §2.19's loop of three files in a watched pane, and record
+  **(a)** whether `commandLine` events arrive at all; **(b)** whether there is one per file of
+  the loop, the middle one especially; and **(c)** their order against `jobName`'s at a start
+  and at a quit. **The design is indifferent to (c)**, since `file` is derived again on either
+  notification; the order decides only whether a start shows a moment of plain `mdview` first.
+  **If (a) fails, §2.19 is not plannable as written**, and the candidate replacement is
+  `jobPid` — which the same measurement saw change on every file of the loop — subscribed the
+  same way, with a `commandLine` read on each change: one round trip per mdview start rather
+  than none. That would be a change to §2.19 made in the review round, before any code.
 
 ## 4. Implementation phases
 
@@ -3288,3 +3506,246 @@ the gate spends two checks on the consumer that is already running.*
   catch the staleness. Commit plan: **on `main`, no branch and no PR**, as Phase 9 took — the
   stream change and the switch first, then the test and the corrected comments, then rules,
   README and the dated notes. **One push.**
+
+### Phase 11 — what an mdview tab has open
+
+*Produces the observable: **yes**, and it changes the observable's own sentence a second time:
+"the file open in a Helix tab" becomes "the file open in a Helix or mdview tab". After this
+phase a row running mdview reads `mdview <file>` in its process cell, and the stream carries the
+same `file` for panex-tui to draw when it chooses to. **The risk is not §2.7's**, since nothing
+here reads a screen; it is §2.17's rejected one, a launch argument that stops being the open
+file. §2.19 answers it with the fact that mdview cannot change files, and this gate spends its
+sharpest checks on the cases in which a value can still outlive its truth — a loop that moves
+the file while `jobName` stands still, a pane that goes from one program to the other with no
+shell between, and a layout change that must clear nothing.*
+
+- **Scope.**
+  - ~~Settle OQ-17 in this phase's review round, not during implementation.~~ Settled
+    2026-09-20, in that round: `commandLine` notifies once per file, `jobName` first (OQ-17).
+    The round added `commandLine` to the variables `src/bin/oko-probe.rs:watch` subscribes, and
+    it stays there as a diagnostic: it is how a later reader sees whether iTerm2 posted a
+    change at all, which is the probe's stated job.
+  - **The probe** (`src/bin/oko-probe.rs`). A subcommand **`mdview`**, beside `hx`: every
+    mdview session of this window, its `jobName`, its `commandLine` verbatim, and what the
+    parser makes of it. It is the oracle for why a row says what it says and the tool the
+    parser's fixtures are captured with. It appears in the probe's usage text **and** its
+    unknown-command message, as `hx` does.
+  - **The parser** (`src/iterm/mdview.rs`, new). `JOB_NAME`, which is `mdview`, and a pure
+    `open_file` from a command line to `Option<String>`, by §2.19's five rules exactly.
+    **Declared in `src/iterm/mod.rs` as `pub mod mdview;` beside `pub mod helix;`**, for the
+    reason `helix.rs` is a submodule of `iterm`: it rides the declaration `oko` and `oko-probe`
+    already have, and `oko-hook`, which declares `status` alone, never reaches it. Its unit
+    tests are **every command line in §2.19's table, verbatim** — captured, not hand-typed —
+    each with its expected answer: a base name for the **eleven distinct lines beginning
+    `mdview `** (the table's first row and its full-path row share `mdview plain.md`), which
+    include `nested.md` for the path with a directory and `-dash.md` for `./-dash.md`, and
+    **nothing** for the symlink and `exec -a` rows. Then the rejections the table does not
+    reach: a second argument (`mdview a.md b.md`), a leading `-` (`mdview --help`), a control
+    character (`mdview "tab<TAB>x.md"`, a real tab), a double-quoted argument containing `\`,
+    a single-quoted one containing `'`, and an empty base name (`mdview dir/`).
+  - **The watcher** (`src/iterm/watch.rs`).
+    - **Three renames.** `track_helix` → `track_files`, `tracking_helix` → `tracking_files`,
+      and `sync_helix` → `sync_files` — the last for the reason §2.19 gives for the first:
+      it now reconciles two jobs, and a name that says Helix would be the name lying. The
+      two callers of `track_files`, in `src/main.rs:run` and `src/follow.rs:run`, follow; nothing
+      else calls it.
+    - **The clear lives in `apply`'s `jobName` arm, and only there.** When the notified value
+      **differs from the one the row holds**, `file` is cleared and then `sync_files` runs; a
+      notification carrying the value already held clears nothing. `sync_files` itself never
+      clears the file of an `hx` row and never clears an `mdview` row's except by deriving it.
+      **This is §2.19's "a change means the value moved"**, and putting the clear anywhere
+      `rescan` also reaches is the defect check 6 exists for.
+    - **`sync_files` has three arms**, and is called from the same three places `sync_helix`
+      is — `apply` on a `jobName` change, `rescan` for every row, and `track_files` for the
+      rows that already exist — so an mdview running before Oko started is found as one
+      started later is (check 9):
+      - **`hx`**: exactly as today — subscribe the screen and mark it `Due::AtOnce` if the
+        session is not yet in `screen_subscribed`, otherwise nothing.
+      - **`mdview`**: first what every non-`hx` job does today — cancel a screen subscription
+        and drop a due read, so a later `hx` in this pane is subscribed afresh and read at
+        once. Then, if `(session, "commandLine")` has never been attempted: insert it into the
+        existing `subscribed` set, subscribe, and **only if the subscribe succeeded** read
+        `commandLine` once and store it (§2.19, "a refused subscribe keeps nothing"). Then
+        derive: `file` is the parser's answer on the stored value, or `None` when there is none.
+      - **any other job**: cancel a screen subscription, drop a due read, clear `file` — as
+        today's non-`hx` branch does.
+      **Neither the subscribe nor the read is fatal**, for the reason a screen subscription is
+      not: it serves one optional cell.
+    - **`commandLine` is held off the row**, in a map on the `Watcher` from session to value,
+      and **`apply` stores a `commandLine` notification before it looks for a row** — ahead of
+      the early return for a session with no row, so the map stays current for a session
+      outside the window (§2.19). Only then, when the session has a row whose job is
+      `mdview`, is `file` derived again. Every other row ignores it.
+    - **`OKO_DEBUG_READS` logs the `commandLine` read too**, one timestamp, so the cost claim —
+      one round trip per session that ever runs mdview, none per file after it — is
+      countable. No session id and no command line, for the reason Phase 9 gave for no file
+      name.
+  - **The table and the stream** (`src/ui.rs:render_row`, `src/follow.rs:row_json`). **One
+    predicate answers whether a job is one Oko reads a file for** — `hx` or `mdview` — a free
+    function in `src/iterm/watch.rs` added to `src/iterm/mod.rs`'s `pub use watch::{…}`, since
+    `watch` is a private module and `ui.rs` and `follow.rs` reach its items only through that
+    re-export. Both callers use it, so the table and the stream cannot disagree about which
+    rows carry a file. The cell reads `mdview <file>` where it read `hx <file>`; the column
+    keeps its width. `row_json` publishes `file` on an `mdview` row; `SCHEMA` stays 1. **The
+    tests are assertions inside existing tests, as Phases 9 and 10 placed theirs**: an mdview
+    row beside the Helix one in `the_age_is_not_truncated_in_the_drawn_table`, reading
+    `mdview plain.md`; the presence half beside the `hx` one in
+    `a_row_without_one_carries_the_job_verbatim`; and Phase 10's absence assertion in
+    `a_row_with_a_status_carries_claude_and_no_job` **stays as it is** — its deliberately
+    impossible `file` on a status row is what forces the predicate to be about the job.
+  - **The prose this makes false is corrected in the same pass**, because nothing mechanical
+    catches a stale comment and `src/iterm/watch.rs` is a declared source of six rules today
+    and seven after this phase, which `/sync-rules` would carry it back into: `src/iterm/watch.rs`'s module
+    documentation, whose subscription list names `path` and `jobName` alone; `Row::file`'s
+    ("the file open in a Helix pane", and its "`None` is two different things"); the
+    documentation of the three renamed items; `src/follow.rs:row_json`'s ("present only on a
+    row whose job is `hx`"); the comment in `src/ui.rs:render_row`; the comments at the
+    `track_files` call in `src/main.rs:run` and `src/follow.rs:run`; and
+    `src/bin/oko-probe.rs:hx`'s ("the stream carries a file only for a row whose job is `hx`").
+  - **Outside this repository, one sentence**: mdview's `CLAUDE.md` gains the constraint §2.19
+    ends on — Oko reads mdview's open file from its argv, so opening a second file without
+    exiting makes Oko wrong, and the fix then is for mdview to announce its file rather than for
+    Oko to read its screen — with a pointer to `oko-001` §2.19. It is committed in that
+    repository, not here.
+  - **Not in scope, each a decision rather than an omission:** no change to mdview's code; no
+    screen read of an mdview pane; no column-width change; no scroll position, no path; no
+    other pager or reader; nothing for a symlinked or `exec -a` mdview; and nothing in
+    panex-tui, whose card draws `mdview` today and needs its own mark to draw the file.
+- **Exit gate.** **This gate creates its own artifacts, and runs in a fresh window** — any other
+  mdview or Helix pane in the window would add reads and rows the checks do not account for.
+  `cargo build`, and let `OKO=~/dev/main/oko/target/debug/oko`: **every `oko` below is that
+  build** — the installed one predates this phase until check 10 replaces it.
+  - **Files.** `/tmp/oko-11/` holding `plain.md`, `b.md`, `with space.md`,
+    `sub dir/nested.md`, `q"uote.md`, `it's.md` and `both'"q.md`, each `printf '# x\n'`;
+    `long.md`, `seq 1 5000`, so a held key scrolls it; a symlink `/tmp/oko-11/mdv-link` to
+    `$(command -v mdview)`; and `nostatus.toml` holding `[editor.statusline]`,
+    `left = ["file-name"]` and `right = []`.
+  - **Two tabs.** Tab 1 is split: the dashboard, `OKO_DEBUG_READS=1 $OKO`, and **A**, a `zsh`
+    in `/tmp/oko-11/`, so the runner types into A with the table in view. **The dashboard's
+    pane is at least 80 columns wide** — stack the two panes if the window cannot give it that
+    side by side: under about 73, ratatui's `Min(10)` on `where` outranks the process column's
+    `Length(17)` and squeezes it first, and check 2's cut string comes out shorter against a
+    correct build. Tab 2 is split:
+    `$OKO --follow > /tmp/oko-11.jsonl` in a shell **where `OKO_DEBUG_READS` is not set** —
+    exported there, every read in check 7 counts twice — and **O**, the observer.
+  - **One helper, in O.** Set `A` to A's session id — `echo ${TERM_SESSION_ID#*:}` in A — and
+    define `mark() { echo $(( $(wc -l < /tmp/oko-11.jsonl) + 1 )); }` and
+    `row() { tail -n +"$2" /tmp/oko-11.jsonl | jq -c --arg id "$1" 'select(.rows?) | .rows[] | select(.session_id == $id) | [.job, .file]'; }`.
+    `n=$(mark)` before a step and `row $A $n` after it print **A's `[job, file]` on every
+    snapshot written since**, one per line, `null` where `file` is absent. **Every stream
+    criterion below is read this way**, because a snapshot line carries every row and a
+    `grep` for a literal cannot say whose it is. Keepalives are blank and `jq` skips them.
+  - **"Within 2 seconds"** is `jobName`'s poll with margin (`rules/iterm-api.md`: it is
+    poll-driven); OQ-17 saw `commandLine` notify in the same millisecond as `jobName`.
+  1. **An mdview row names its file.** `n=$(mark)`; in A, `mdview plain.md`: within 2 seconds
+     A's cell reads `mdview plain.md`, and `row $A $n` ends with `["mdview","plain.md"]`. `q`.
+  2. **Quotes are read, not stripped, and only the base name is kept.** For each command,
+     `n=$(mark)`, run it in A, wait for mdview to draw, and `row $A $n` shows the pair; `q`
+     after each. `mdview 'with space.md'` → `["mdview","with space.md"]`, the cell cut to
+     `mdview with space`; `mdview 'sub dir/nested.md'` → `["mdview","nested.md"]`;
+     `mdview 'q"uote.md'` → `["mdview","q\"uote.md"]`; `mdview "it's.md"` →
+     `["mdview","it's.md"]`. The last two are the two quote styles, one each.
+  3. **It follows the process, not the job name.** `n=$(mark)`; in A,
+     `for f in plain.md 'with space.md' plain.md; do mdview "$f"; done`, pressing `q` three
+     seconds after each file draws, and watching A's cell name each file while it is open.
+     Then `row $A $n | grep -v null | uniq` reads **exactly** `["mdview","plain.md"]`,
+     `["mdview","with space.md"]`, `["mdview","plain.md"]`, in that order — `grep -v null`
+     drops the transient OQ-17 predicts at the loop's start and the `zsh` at its end, `uniq`
+     the repeats other rows' changes write. **This is the check an implementation reading
+     `commandLine` only when `jobName` changes fails**: its capture is `plain.md` alone.
+  4. **Absence, not a guess.** `n=$(mark)`; `mdview "both'\"q.md"`; wait 3 seconds: the cell
+     reads `mdview`, and `row $A $n | grep '"mdview","'` prints **nothing** — no line pairs
+     `mdview` with a file, which also covers the transient line OQ-17 predicts ahead of any
+     answer. Whatever iTerm2 writes for an argument needing both quotes, the parser admits no
+     escape; a build that strips the outer quotes and keeps what is between names that escape.
+     `q`. Then the same for `./mdv-link plain.md`, by the parser's first rule. `q`.
+  5. **Leaving mdview clears the cell.** `mdview plain.md`, wait for the name, `n=$(mark)`,
+     `q`: within 2 seconds A's cell reads `zsh`, and the first line of `row $A $n` whose job is
+     `zsh` carries `null`. **This is the visible half only**: both outputs gate on the job, so
+     a stale `file` on a `zsh` row cannot be seen here, and check 8 is where it can.
+  6. **A layout change clears nothing — Helix's name as well as mdview's.** Open a new tab C;
+     in it, `echo ${TERM_SESSION_ID#*:}` and set `C` in O to that id, **then**
+     `hx /tmp/oko-11/b.md`. Back in A,
+     `mdview plain.md`, and wait until the table reads `hx b.md` for C and `mdview plain.md` for
+     A. `n=$(mark)`; **open a new tab D and close it**, touching nothing in A or C; wait 3
+     seconds. `row $A $n` prints only `["mdview","plain.md"]` and `row $C $n` only
+     `["hx","b.md"]`, over **at least two lines each** — D's arrival and departure each write
+     one. **The stream is the witness, not the cell**: opening D fronts it and hides the table.
+     **The Helix half is the one that can fail**: a build that clears on `rescan`'s call derives
+     A's file again in the same pass and passes the mdview half, but C is already subscribed,
+     gets no `Due::AtOnce`, and reads `["hx",null]` — Phase 9's check 7 defect, in the function
+     this phase restructures. A new tab and not a split, for Phase 9's reason: a split resizes
+     the Helix pane and its redraw repairs the defect. `:q` in C, close C, `q` in A.
+  7. **One round trip per pane, ever, and none per file.** No Helix pane is open now. Open a
+     new tab B and `cd /tmp/oko-11`. **Each count is the growth of `wc -l ~/.oko/reads.log`
+     between a baseline taken just before the step and a reading 3 seconds after it.**
+     (a) `mdview plain.md` → **1**, the subscribe-then-read; `q`. (b) `mdview b.md` → **0**,
+     the subscription carried it; `q`. (c) check 3's loop → **0**. (d) `mdview long.md`, wait
+     for it to draw, **then** take the baseline; hold `j` for five seconds; → **0**, an mdview
+     pane's screen is never read; `q`. **A correct build gives 1, 0, 0, 0.** One that reads
+     `commandLine` on every start gives 1, 1, 1, 0 — the loop's first file is a start, and (d)'s
+     baseline follows its start. One that treated mdview like Helix grows at every step. Close
+     B.
+  8. **A file never outlives the job that named it.** `n=$(mark)`; in A,
+     `mdview plain.md; hx -c nostatus.toml b.md`, pressing `q` once mdview draws; wait 3
+     seconds. **Validity first**: `row $A $n | uniq` shows `mdview` lines and then `hx` lines
+     with **no `zsh` line between** them — the direct transition the review round measured in
+     3 runs of 3 (§2.19). A `zsh` between voids the step, since the other-job arm clears `file`
+     for any build; re-run it. **Then the check**: A's cell reads `hx`, **never `hx plain.md`**,
+     and `row $A $n | grep '"hx","'` prints nothing. This Helix has a status line Oko cannot
+     match, so no read will ever replace an inherited name, which is what makes this the check
+     that sees the clear. `:q!`. Then `hx b.md` → `hx b.md` within 2 seconds, and `:q` →
+     `zsh`: Helix otherwise untouched.
+  9. **An mdview running before Oko started is found.** With `mdview plain.md` open in A, in
+     O: `$OKO --follow | head -2 | tail -1 | jq -c --arg id "$A" '.rows[] | select(.session_id == $id) | [.job, .file]'`
+     prints `["mdview","plain.md"]`. The second line is the opening snapshot, which
+     `src/follow.rs:run` writes after `track_files` has swept the rows that already exist, so
+     the sweep's subscribe-then-read is what this reads. `q` in A.
+  10. **The installed panex-tui still draws its cards.** `cargo install --path .`, run `panex`
+      in O and press `O`; with `mdview plain.md` open in A, A's card reads `mdview` as it did
+      before this phase, and every other card is unchanged. Against the installed panex-tui, as
+      Phase 10's check 5 was. **Quit panex**, not only its card view — check 11 runs in O — and
+      `q` in A.
+  11. **The renames are complete, and a one-shot subscribes nothing.** `grep -rn
+      'track_helix\|tracking_helix\|sync_helix' src/` prints **nothing**, and
+      `grep -n 'track_files' src/main.rs src/follow.rs` shows **exactly two calls**, in the
+      dashboard branch and the stream branch. **And at runtime**, since unlike a screen read the
+      `commandLine` subscribe-and-read would sit in the reconciliation `Watcher::connect`'s
+      `rescan` already reaches: with `mdview plain.md` open in A, take `wc -l ~/.oko/reads.log`,
+      run `OKO_DEBUG_READS=1 $OKO --activate $A` in O, wait 3 seconds: **unchanged**. A one-shot
+      that ignored the switch would read A's command line once. `q` in A.
+  12. **`cargo test` is green**, `cargo clippy --all-targets -- -D warnings` is clean and
+      `spec-lint --strict` passes. **Per binary, from counts measured at HEAD on 2026-09-20**
+      — `oko` 48, `oko-probe` 25, `oko-hook` 17 — and with **P** the parser's `#[test]`
+      functions: `oko` is **48 + P**, `oko-probe` **25 + P**, and **`oko-hook` stays at 17**.
+      The table and stream assertions add nothing to the count, being inside existing tests.
+- **Close-out.** **Reconciliation.** **A new `rules/mdview-file.md`**, `max_lines: 70` —
+  sources `src/iterm/mdview.rs` and `src/iterm/watch.rs`; covers the gate on `jobName`, why the
+  launch argument is the open file and the one mdview change that would end that, the
+  subscription and the single read, the loop that makes it a subscription, the map kept for
+  sessions outside the window, the parser's five rules and its two answers, the clear on a job
+  change, and what the stream carries. **A new rule rather than a section of
+  `rules/helix-file.md`**, whose whole subject is reading a screen. Four existing rules change,
+  **and all four are at their caps** — `helix-file` 110/110, `follow-stream` 88/88,
+  `dashboard-ui` 118/118, `iterm-api` 115/115 — **so each edit that does not fit in place is
+  paid for by a cut in the same rule, and the close-out commit names the cut.**
+  `rules/helix-file.md`: `track_helix` becomes `track_files` (the same length), the
+  `OKO_DEBUG_READS` sentence says it counts command-line reads too, and its frontmatter
+  `covers` is re-read. `rules/follow-stream.md`: its `file` table row, "where `job` is `hx` or
+  `mdview`". `rules/dashboard-ui.md`: its process-cell sentence, the tight one.
+  `rules/iterm-api.md`: `commandLine` among the variables watched. `rules/INDEX.md` is
+  regenerated. `README.md` gains an mdview paragraph beside the Helix one, `mdview` in the
+  stream section's `file` sentence, and `oko-probe mdview` in its probe list. **The
+  `CLAUDE.md` observable line changes** — "the file open in a Helix tab" becomes "the file open
+  in a Helix or mdview tab" — and so does the spec's `note`, which regenerates `specs/INDEX.md`.
+  **§2.18 gets a dated note** on its last paragraph, whose "no editor but `hx`" this phase
+  narrows for the stream; §2.17's list is re-read and the expected answer is no change, since
+  its screen mechanism is still `hx` alone. §1's sketch is re-read: its row 3 names the
+  *directory* `mdview`, running Claude, and is not this phase's row, so the expected answer is
+  no change. OQ-17 was resolved in the review round, and the close-out confirms it still
+  describes what shipped. mdview's `CLAUDE.md` sentence is committed in that repository.
+  `/tmp/oko-11/` and `/tmp/oko-11.jsonl` are deleted. Commit plan: **on `main`, no branch and
+  no PR**, as Phases 9 and 10 took — the spec, OQ-17's resolution and the review record first,
+  then the probe, then the parser and its fixtures, then the watcher and the renames, then the
+  table and the stream, then rules, README, `CLAUDE.md` and the dated note. **One push.** The
+  release is its own `chore:` commit afterwards, as 0.3.0 and 0.4.0 were.
