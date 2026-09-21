@@ -30,5 +30,5 @@ mod watch;
 pub use client::{Client, socket_path};
 pub use watch::{
     Cmd, Event, OKO_NAME, Placed, Row, Snapshot, Watcher, flatten, own_tty, resolve_own_session,
-    row_variables,
+    row_variables, tracks_a_file,
 };

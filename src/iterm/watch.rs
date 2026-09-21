@@ -950,6 +950,17 @@ pub fn flatten(list: &ListSessionsResponse) -> Vec<Placed> {
     out
 }
 
+/// Whether Oko reads the open file of a pane running this job — `hx` or `mdview` (§2.17,
+/// §2.19).
+///
+/// **One predicate, so the table and the stream cannot disagree** about which rows carry a
+/// file: `src/ui.rs:render_row` and `src/follow.rs:row_json` both ask it. It is about the job
+/// and never about [`Row::file`] being set, which is what keeps a status row's impossible file
+/// off both.
+pub fn tracks_a_file(job: &str) -> bool {
+    matches!(job, helix::JOB_NAME | mdview::JOB_NAME)
+}
+
 /// The variables a row is built from, for callers that want to read them directly.
 pub fn row_variables(client: &mut Client, session_id: &str) -> Result<HashMap<String, String>> {
     client.variables(session_id, &ROW_VARS)

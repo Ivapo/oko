@@ -38,7 +38,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row as TableRow, Table, TableState};
 
-use crate::iterm::{Cmd, Event as ItermEvent, Row, Snapshot, helix};
+use crate::iterm::{Cmd, Event as ItermEvent, Row, Snapshot, tracks_a_file};
 use crate::status::{Shown, Status};
 
 /// The status column's width, and it is **counted rather than trusted**.
@@ -369,10 +369,11 @@ fn render_row(row: &Row, edit: Option<&Edit>) -> TableRow<'static> {
     let process = match row.status {
         Some(_) => "claude".to_string(),
         None => match (row.process.as_deref(), row.file.as_deref()) {
-            // §2.17: the file's base name, in the process cell. The column keeps its width,
-            // so a long name is cut exactly as a long `jobName` already is. A row carrying a
-            // status is untouched above — its job is never `hx`.
-            (Some(job), Some(file)) if job == helix::JOB_NAME => format!("{job} {file}"),
+            // §2.17, §2.19: the file's base name, in the process cell — `hx <file>` or
+            // `mdview <file>`. The column keeps its width, so a long name is cut exactly as a
+            // long `jobName` already is, and `mdview ` spends seven of its 17 cells. A row
+            // carrying a status is untouched above — its job is neither.
+            (Some(job), Some(file)) if tracks_a_file(job) => format!("{job} {file}"),
             (Some(job), _) => job.to_string(),
             (None, _) => "-".to_string(),
         },
@@ -633,6 +634,14 @@ mod tests {
                     age: Some(Age::M30),
                 }),
                 helix_row(Some("main.rs")),
+                // An mdview row, whose file comes from its command line rather than a screen.
+                Row {
+                    session_id: "D".to_string(),
+                    tab: 4,
+                    process: Some("mdview".to_string()),
+                    file: Some("plain.md".to_string()),
+                    ..helix_row(None)
+                },
             ],
             100,
         );
@@ -657,6 +666,8 @@ mod tests {
         // rather than a new one, because check 12 reads the per-binary test counts and
         // `oko-probe` does not compile this file.
         assert!(table.contains("hx main.rs"), "{table}");
+        // And Phase 11's, in the same cell and the same test for the same reason.
+        assert!(table.contains("mdview plain.md"), "{table}");
     }
 
     #[test]

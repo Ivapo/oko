@@ -24,7 +24,7 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use crate::iterm::{Cmd, Event, Row, Snapshot, Watcher, helix};
+use crate::iterm::{Cmd, Event, Row, Snapshot, Watcher, tracks_a_file};
 use crate::status::Age;
 
 /// The schema a consumer must recognise, carried once per stream (OQ-9).
@@ -196,10 +196,12 @@ fn snapshot_line(snapshot: &Snapshot) -> String {
 /// all, because there it is the value and the only one.
 ///
 /// **`file` is a third conditional key, and it arrives under `schema: 1`** (§2.18). It is
-/// present only on a row whose job is `hx` and whose screen has been read into a file name —
-/// the same shape `job` and `claude` already have, and the same one a consumer is already
-/// written for. **The condition is the job and never `file.is_some()`**: a row carrying a
-/// status is never Helix, so both spellings agree on every live row and only
+/// present only on a row whose job is one Oko reads a file for — `hx` or `mdview` (§2.19) —
+/// and whose file is known: a Helix screen read into a name, an mdview command line parsed into
+/// one. The same shape `job` and `claude` already have, and the same one a consumer is already
+/// written for. **The condition is the job and never `file.is_some()`**, asked of the one
+/// predicate the table asks too: a row carrying a status runs neither program, so both
+/// spellings agree on every live row and only
 /// `a_row_with_a_status_carries_claude_and_no_job`'s impossible fixture tells them apart. No
 /// schema bump, because a key an old consumer ignores does not make it wrong — panex-tui's
 /// `Row` has no `deny_unknown_fields` and goes on drawing — while `schema: 2` means *stop
@@ -217,7 +219,7 @@ fn row_json(row: &Row) -> serde_json::Value {
         Some(_) => value["claude"] = json!(true),
         None => value["job"] = json!(row.process),
     }
-    if row.process.as_deref() == Some(helix::JOB_NAME) && let Some(file) = &row.file {
+    if row.process.as_deref().is_some_and(tracks_a_file) && let Some(file) = &row.file {
         value["file"] = json!(file);
     }
     value
@@ -288,8 +290,9 @@ mod tests {
         // no identity test, and moves on its own (OQ-7).
         assert!(row.get("job").is_none(), "{row}");
         // **And no `file`, though this row has one** (§2.18). The schema publishes it only
-        // where the job is `hx`, which a row carrying a status never is — so the fixture above
-        // is the one row on which the job-keyed condition and a `file.is_some()` one disagree.
+        // where the job is `hx` or `mdview`, which a row carrying a status never is — so the
+        // fixture above is the one row on which the job-keyed condition and a `file.is_some()`
+        // one disagree.
         assert!(row.get("file").is_none(), "{row}");
         assert_eq!(row["status"], "waiting");
         assert_eq!(row["age"], ">10m");
@@ -323,6 +326,15 @@ mod tests {
         let row = &value["rows"][0];
         assert_eq!(row["file"], "main.rs");
         assert_eq!(row["job"], "hx");
+
+        // **So does an mdview row** (§2.19), whose file comes from its command line — the one
+        // predicate the table also asks, so the two cannot disagree about which rows carry it.
+        let mut reading = plain_row(Some("mdview"));
+        reading.file = Some("plain.md".to_string());
+        let value = line_of(vec![reading]);
+        let row = &value["rows"][0];
+        assert_eq!(row["file"], "plain.md");
+        assert_eq!(row["job"], "mdview");
 
         // A Helix pane whose status line has never matched: `job` and **no `file` key**, not a
         // null. That pair is how a consumer tells it from a row that is not Helix at all,
