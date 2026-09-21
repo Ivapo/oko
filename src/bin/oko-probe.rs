@@ -7,6 +7,7 @@
 //!     oko-probe activate <session>   focus that session, its tab, and its window
 //!     oko-probe watch                print notifications as they arrive
 //!     oko-probe hx [<session>]       what every Helix pane has open, and how it is read
+//!     oko-probe mdview               what every mdview pane was launched on
 //!     oko-probe screen-watch <s>…    one line per screen update, with the gap
 //!
 //! `watch` deliberately subscribes to **more** than the dashboard does — terminate-session
@@ -36,9 +37,10 @@ use iterm::{Client, flatten, helix, own_tty, resolve_own_session};
 const ADVISORY_NAME: &str = "oko-probe";
 
 /// The `//!` block's lines. `var` is deliberately absent: it is OQ-5's spike, kept as a
-/// diagnostic, and not one of the things a person reaching for this binary wants. **`hx` and
-/// `screen-watch` are here, and in the unknown-command message, for the opposite reason**:
-/// they are how a later reader re-measures OQ-15 and OQ-16 against a Helix that has moved on.
+/// diagnostic, and not one of the things a person reaching for this binary wants. **`hx`,
+/// `mdview` and `screen-watch` are here, and in the unknown-command message, for the opposite
+/// reason**: they are how a later reader re-measures OQ-15, OQ-16 and §2.19's table against a
+/// Helix, an mdview or an iTerm2 that has moved on.
 const USAGE: &str = "\
 oko-probe — Oko's headless diagnostic: what iTerm2 thinks, without a full-screen TUI in the
 way. When a dashboard row looks wrong, this is what says whether iTerm2 ever reported it.
@@ -51,6 +53,8 @@ usage:
                                   rows of its screen and the file the parser reads off them.
                                   With a session, that session's screen rows alone, verbatim,
                                   which is how a parser fixture is captured
+  oko-probe mdview                every mdview pane: its job name and its command line verbatim,
+                                  which is how the command-line parser's fixtures are captured
   oko-probe screen-watch <s>...   subscribe those sessions to screen updates and print one
                                   line per update, with the gap since that session's last
   oko-probe --help, -h            print this
@@ -83,6 +87,7 @@ fn run() -> Result<()> {
         }
         Some("watch") => watch(),
         Some("hx") => hx(args.get(1).map(String::as_str)),
+        Some("mdview") => mdview(),
         Some("screen-watch") => screen_watch(&args[1..]),
         Some("var") => var_spike(),
         // It never fell through to enumerating a window — `Some(other)` below already
@@ -95,7 +100,7 @@ fn run() -> Result<()> {
         Some(other) => {
             bail!(
                 "unknown command {other:?}; expected `activate <session-id>`, `watch`, \
-                 `hx [<session-id>]`, `screen-watch <session-id>...` or `var`"
+                 `hx [<session-id>]`, `mdview`, `screen-watch <session-id>...` or `var`"
             )
         }
     }
@@ -310,9 +315,10 @@ const HX_VARS: [&str; 4] = ["jobName", "deepestJob", "commandLine", "terminalWin
 /// The two forms are one command because they answer one question at two altitudes. The
 /// report is for a human asking why a row says what it says; the bare rows are how a parser
 /// fixture is captured, byte for byte, which a report can never be. The operand deliberately
-/// accepts **any** session, not only a Helix one: the stream carries a file only for a row
-/// whose job is `hx` (§2.18), so pointed at a pane that is not one — Oko's own, a shell — this
-/// is still the only oracle there is for what a screen actually holds.
+/// accepts **any** session, not only a Helix one: a screen is read only for a row whose job is
+/// `hx` (§2.17), so pointed at a pane that is not one — Oko's own, a shell, an mdview, whose
+/// file comes from its command line instead — this is still the only oracle there is for what
+/// a screen actually holds.
 fn hx(session: Option<&str>) -> Result<()> {
     let mut client = connect()?;
 
@@ -361,6 +367,42 @@ fn hx(session: Option<&str>) -> Result<()> {
 
     if found == 0 {
         println!("no session in this window has jobName `hx`.");
+    }
+    Ok(())
+}
+
+/// What every mdview pane of this window was launched on (§2.19).
+///
+/// **No screen, and no operand**: an mdview row's file is derived from `commandLine` alone, so
+/// that string is the whole of "why does this row say what it says" — and printed verbatim, one
+/// field to a line, it is also how the parser's fixtures are captured rather than hand-typed.
+/// `jobName` is printed beside it because the two disagree exactly where the parser answers
+/// nothing: a symlink or an `exec -a` name reads its own first word over a `jobName` of
+/// `mdview`.
+fn mdview() -> Result<()> {
+    let mut client = connect()?;
+    let list = client.list_sessions()?;
+    let placed = flatten(&list);
+    let own = resolve_own_session(&mut client, &list)?;
+    let me = placed.iter().find(|p| p.session_id == own).expect("the join came from this list");
+
+    let mut found = 0;
+    for p in placed.iter().filter(|p| p.window_id == me.window_id) {
+        let vars = client.variables(&p.session_id, &["jobName", "commandLine"])?;
+        let get = |name: &str| vars.get(name).cloned().unwrap_or_else(|| "-".into());
+        if get("jobName") != "mdview" {
+            continue;
+        }
+        found += 1;
+
+        println!("── tab {} · {} ──────────────────────────────────", p.tab, p.session_id);
+        println!("  {:<12} {}", "jobName", get("jobName"));
+        println!("  {:<12} {}", "commandLine", get("commandLine"));
+        println!();
+    }
+
+    if found == 0 {
+        println!("no session in this window has jobName `mdview`.");
     }
     Ok(())
 }
