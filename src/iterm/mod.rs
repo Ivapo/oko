@@ -24,6 +24,7 @@ pub mod api {
 
 mod client;
 pub mod helix;
+pub mod mdview;
 mod watch;
 
 pub use client::{Client, socket_path};
