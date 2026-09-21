@@ -6,7 +6,7 @@ note: >
   mdview tab and Claude Code status for every tab in the window, with Enter to jump to the
   selected one.
 status: accepted
-last_updated: 2026-09-20
+last_updated: 2026-09-21
 
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
@@ -61,7 +61,7 @@ phases:
     by: null
   - name: "Phase 11 — what an mdview tab has open"
     reviewed: 2026-09-20
-    shipped: null
+    shipped: 2026-09-21
     cut: null
     by: null
 
@@ -3757,3 +3757,28 @@ shell between, and a layout change that must clear nothing.*
   then the probe, then the parser and its fixtures, then the watcher and the renames, then the
   table and the stream, then rules, README, `CLAUDE.md` and the dated note. **One push.** The
   release is its own `chore:` commit afterwards, as 0.3.0 and 0.4.0 were.
+
+**CORRECTED 2026-09-21 (at the close-out, from running this gate).** Two preconditions this
+gate assumes and does not state, each learned by running into it. **The gate passed on all
+twelve checks; neither note excuses a failure.**
+
+- **Every timed check needs the screen unlocked.** The first attempt ran on past a screen lock,
+  and iTerm2's `jobName` poll slowed until a quit took about 30 s to post and a symlinked
+  mdview's start about 4 s — past checks 1 and 4's clocks — and two mdviews started in that
+  gap posted nothing at all. It was iTerm2's and not Oko's: an `oko-probe watch` in O saw each
+  notification in the same poll as the stream, and missed the same ones. The run of record was
+  taken afterwards, unlocked, from check 1 in a fresh window.
+- **Check 10's panex must start after the new `oko` has run once.** panex-tui gives
+  `oko --version` 300 ms to answer, and the first launch of a binary `cargo install` has just
+  written took longer, so a panex started straight after the install bound no `O`. A second
+  start drew the cards; one `oko --version` beforehand avoids the first.
+
+**What the run of record measured.** Check 1 named the file 1.45 s after the keystroke and
+check 5 cleared it 1.52 s after `q`; check 3's loop read exactly its three pairs in order;
+check 6 wrote four lines for D's arrival and departure, A's and C's unchanged in every one;
+check 7 grew the log **1, 0, 0, 0**; check 8's transition went `mdview` → `hx` with no `zsh`
+between, and the cell read `hx`, never `hx plain.md`. **OQ-17 stands as resolved**: an
+`oko-probe watch` over checks 1–8 saw 17 of 17 job changes post `jobName` first and
+`commandLine` in the same millisecond, and every start in an already-subscribed pane drew its
+one line of plain `mdview`. **And check 4 measured what §2.19 left open**: an argument needing
+both quotes is written bare with backslashes — `mdview both\'\"q.md` — which the parser refuses.
