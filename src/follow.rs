@@ -53,12 +53,12 @@ pub fn run(advisory_name: &str) -> Result<()> {
     // and a stream whose header had already gone out would be promising a protocol it cannot
     // speak. Stdout stays empty on this failure and the message goes to stderr, via `main`.
     let mut watcher = Watcher::connect(advisory_name)?;
-    // **The stream reads screens too** (§2.18), which is what lets `row_json` publish a file at
-    // all. Phase 9 confined this to the dashboard on a premise this phase removes — reads were
+    // **The stream reads files too** (§2.18), which is what lets `row_json` publish one at
+    // all. Phase 9 confined this to the dashboard on a premise Phase 10 removed — reads were
     // pure cost *because the stream published nothing*. Neither one-shot command gains it:
-    // `--activate` would still pay a subscription round trip per Helix pane to send one
-    // request and exit, and it still refuses to.
-    watcher.track_helix();
+    // `--activate` would still pay a subscription round trip per Helix or mdview pane to send
+    // one request and exit, and it still refuses to.
+    watcher.track_files();
 
     let mut stream = Stream::new(io::stdout());
     stream.header()?;

@@ -4,8 +4,9 @@
 //! then position within the tab. The rows track reality by **subscription, not polling**
 //! (OQ-3), and it takes three kinds:
 //!
-//! - `NOTIFY_ON_VARIABLE_CHANGE`, per session *and* per variable, for `path` and `jobName`.
-//!   A session that appears later is covered only if it is subscribed on arrival.
+//! - `NOTIFY_ON_VARIABLE_CHANGE`, per session *and* per variable, for `path`, `jobName` and
+//!   `user.okoName` — and `commandLine`, for a session from the first time its job is mdview
+//!   (§2.19). A session that appears later is covered only if it is subscribed on arrival.
 //! - `NOTIFY_ON_LAYOUT_CHANGE` for the shape of the window. Dragging a tab creates no
 //!   session, terminates none and changes no session variable, so this is the only event
 //!   that makes the `tab` column live — and its payload is a whole `ListSessionsResponse`,
@@ -35,6 +36,7 @@ use super::api::{
 };
 use super::client::{Client, decode_json_value};
 use super::helix::{self, Open};
+use super::mdview;
 use crate::status::{Shown, Store};
 
 /// The variables a row is made of: the two §2.2 names, and the name §2.10 stores.
@@ -53,6 +55,11 @@ const ROW_VARS: [&str; 3] = ["path", "jobName", OKO_NAME];
 /// dies with the pane, iTerm2 owns the concurrency, and two Oko instances see one value
 /// with no sync protocol at all.
 pub const OKO_NAME: &str = "user.okoName";
+
+/// What an mdview row's file is derived from (§2.19) — **not a row variable**, and so not in
+/// [`ROW_VARS`]: it is subscribed only for a session that runs mdview, and held off the row in
+/// [`Watcher::command_lines`].
+const COMMAND_LINE: &str = "commandLine";
 
 /// How long the watcher waits for a notification before looking at its command channel.
 /// Not a poll of iTerm2 — nothing is asked for; it is how fast a keystroke is served.
@@ -87,20 +94,26 @@ pub struct Row {
     /// literal `claude` instead** (OQ-2) — that is `src/ui.rs`'s doing, not this field's.
     pub process: Option<String>,
     pub path: Option<String>,
-    /// The file open in a Helix pane — its base name, or `None` (§2.17).
+    /// The file open in a Helix or mdview pane — its base name, or `None` (§2.17, §2.19).
     ///
-    /// **Held on the watcher's rows like [`path`], unlike [`name`] and [`status`]**, and
-    /// patched by a screen read rather than by a notification, so
+    /// **Held on the watcher's rows like [`path`], unlike [`name`] and [`status`]**, so
     /// [`emit_if_changed`](Watcher::emit_if_changed)'s one comparison sees it and a changed
-    /// file is an emission. `rescan` carries it forward for the same reason it carries
-    /// `path`: a layout change rebuilds every row, and a `file` dropped there would blank
-    /// every Helix row each time any tab in the window opened, closed or moved.
+    /// file is an emission. A Helix row's is patched by a screen read; an mdview row's is
+    /// derived from its `commandLine`, which is held off the row in
+    /// [`command_lines`](Watcher::command_lines). `rescan` carries it forward for the same
+    /// reason it carries `path`: a layout change rebuilds every row, and a `file` dropped there
+    /// would blank every Helix row each time any tab in the window opened, closed or moved.
     ///
-    /// **`None` is two different things on purpose** — a row that is not Helix, and a Helix
-    /// row whose screen has never matched a status line — and both draw plain `hx`.
-    /// `src/follow.rs:row_json` publishes it on a row whose job is `hx` (§2.18), so a file
-    /// switch is a line on the stream rather than one it suppresses — and a consumer tells the
-    /// two `None`s apart by `job` alone, exactly as the table does.
+    /// **It never outlives the job that named it**: a `jobName` that moves clears it before
+    /// the new job's mechanism runs, since a pane can go from one of the two programs straight
+    /// to the other with no shell between.
+    ///
+    /// **`None` is several things on purpose** — a row whose job Oko reads no file for, a Helix
+    /// row whose screen has never matched a status line, an mdview row whose command line does
+    /// not parse — and each draws its job alone. `src/follow.rs:row_json` publishes it on a row
+    /// whose job is one Oko reads a file for (§2.18, §2.19), so a file switch is a line on the
+    /// stream rather than one it suppresses — and a consumer tells the `None`s apart by `job`
+    /// alone, exactly as the table does.
     ///
     /// [`path`]: Row::path
     /// [`name`]: Row::name
@@ -225,12 +238,28 @@ pub struct Watcher {
     rows: Vec<Row>,
     /// Which (session, variable) pairs are already subscribed. A session that leaves this
     /// window and comes back is still subscribed — resubscribing it would be a second
-    /// notification for every change.
+    /// notification for every change. **A `commandLine` pair is an attempt, not a success**:
+    /// it is entered before the request, so a refused one costs one round trip and not one per
+    /// pass.
     subscribed: HashSet<(String, &'static str)>,
     /// Whether tracking was turned on. **Off until it is** (§2.18): the dashboard and
     /// `--follow` both turn it on, because both have somewhere to put the file, and a one-shot
-    /// command would pay a subscription round trip per Helix pane to send one request and exit.
-    tracking_helix: bool,
+    /// command would pay a subscription round trip per Helix or mdview pane to send one request
+    /// and exit.
+    tracking_files: bool,
+    /// Each `commandLine` subscribed session's latest value, **held off the row** (§2.19).
+    ///
+    /// Off the row because [`Row`] is what [`emit_if_changed`](Self::emit_if_changed)
+    /// compares, and a command line on it would make every command run in a subscribed pane an
+    /// emission; only the `file` derived from it crosses over. **And kept for every subscribed
+    /// session, whether or not it has a row**: a session that leaves the window stays
+    /// subscribed, and a value dropped while it was away would be stale when it came back — it
+    /// left on `a.md`, ran `mdview b.md` elsewhere, and returns reading `a.md`.
+    ///
+    /// No entry means no value, and derives no file. That includes a session whose subscribe
+    /// was refused, whose one read is deliberately not stored: a value no notification will
+    /// ever update is the one way this could otherwise name a wrong file.
+    command_lines: HashMap<String, String>,
     /// Sessions subscribed to `NOTIFY_ON_SCREEN_UPDATE`, and therefore **attempted exactly
     /// once each**: the entry is made whether or not iTerm2 accepted, so a session it refuses
     /// costs one round trip and not one per pass. A session that leaves the window keeps its
@@ -269,8 +298,9 @@ impl Watcher {
             rows: Vec::new(),
             subscribed: HashSet::new(),
             // Off here and turned on by the dashboard and the stream, so the `rescan` below
-            // subscribes no screen and the first snapshot carries no file.
-            tracking_helix: false,
+            // subscribes no screen and no command line, and the first snapshot carries no file.
+            tracking_files: false,
+            command_lines: HashMap::new(),
             screen_subscribed: HashSet::new(),
             due_reads: HashMap::new(),
             status: Store::open(),
@@ -307,61 +337,122 @@ impl Watcher {
         Snapshot { window_number: self.window_number, rows }
     }
 
-    /// Starts tracking what Helix panes have open (§2.17).
+    /// Starts tracking what Helix and mdview panes have open (§2.17, §2.19).
     ///
     /// **The dashboard and `--follow` call this; the one-shot commands do not.**
     /// [`Watcher::connect`] is shared by all four (`src/main.rs:run`), and two of them have
     /// somewhere to put the file: the table's process cell, and the stream's `file` key
     /// (§2.18). `oko --activate` and `oko --set-name` have neither, and would pay a
-    /// subscription round trip per Helix pane in order to send one request and exit.
+    /// subscription round trip per Helix or mdview pane in order to send one request and exit.
     ///
-    /// It sweeps the rows that already exist, so a Helix pane running before Oko started is
-    /// subscribed and read exactly as one that arrives later is.
-    pub fn track_helix(&mut self) {
-        self.tracking_helix = true;
+    /// It sweeps the rows that already exist, so a pane running either program before Oko
+    /// started is subscribed and read exactly as one that arrives later is.
+    pub fn track_files(&mut self) {
+        self.tracking_files = true;
         let sessions: Vec<String> = self.rows.iter().map(|r| r.session_id.clone()).collect();
         for session in sessions {
-            self.sync_helix(&session);
+            self.sync_files(&session);
         }
     }
 
-    /// Brings one session's screen subscription and its [`Row::file`] into line with its
-    /// `jobName`.
+    /// Brings one session's subscriptions and its [`Row::file`] into line with its `jobName`.
     ///
-    /// A job that becomes `hx` is subscribed and marked due at once; one that stops being
-    /// `hx` is unsubscribed and its file and its mark cleared **in the same pass**, so a quit
-    /// Helix never leaves its last file on a shell row. Idempotent, never retried, and a
-    /// no-op while tracking is off.
+    /// Three arms, by the job:
     ///
-    /// **Neither request is fatal, unlike a failed `apply`.** A screen subscription serves
-    /// one optional cell, and a dead watcher costs the status column, `↵`, `r` and every row;
-    /// nothing is hidden by swallowing it either, because a broken connection reaches
-    /// [`next_notification`](Client::next_notification) on the very next pass.
-    fn sync_helix(&mut self, session_id: &str) {
-        if !self.tracking_helix {
+    /// - **`hx`**: subscribed to screen updates and marked due at once, the first time.
+    /// - **`mdview`**: any screen subscription cancelled, as for any job that is not `hx`; the
+    ///   first time, `commandLine` subscribed and **then** read once, in that order so nothing
+    ///   between them is lost; and `file` derived from the value held (§2.19).
+    /// - **anything else**: any screen subscription cancelled, its mark and its file cleared
+    ///   **in the same pass**, so a quit Helix or mdview never leaves its file on a shell row.
+    ///
+    /// **This never clears an `hx` row's file, and an `mdview` row's only by deriving it.** A
+    /// file that outlives a job *change* is cleared by [`apply`](Self::apply)'s `jobName` arm,
+    /// which knows the value moved; `rescan` also calls this, for rows it is merely confirming,
+    /// and an already-subscribed Helix row cleared there would get no read to repair it.
+    ///
+    /// Idempotent, never retried, and a no-op while tracking is off. **No request is fatal,
+    /// unlike a failed `apply`.** Each serves one optional cell, and a dead watcher costs the
+    /// status column, `↵`, `r` and every row; nothing is hidden by swallowing them either,
+    /// because a broken connection reaches [`next_notification`](Client::next_notification) on
+    /// the very next pass.
+    fn sync_files(&mut self, session_id: &str) {
+        if !self.tracking_files {
             return;
         }
-        let is_helix = self
+        let job = self
             .rows
             .iter()
-            .any(|r| r.session_id == session_id && r.process.as_deref() == Some(helix::JOB_NAME));
+            .find(|r| r.session_id == session_id)
+            .and_then(|r| r.process.clone());
 
-        if is_helix {
-            // The entry is made whether or not iTerm2 accepts, which is what bounds a refusal
-            // at one round trip rather than one per 100 ms pass.
-            if self.screen_subscribed.insert(session_id.to_string()) {
-                let _ = self.client.watch_screen(session_id, true);
-                self.due_reads.insert(session_id.to_string(), Due::AtOnce);
+        match job.as_deref() {
+            Some(helix::JOB_NAME) => {
+                // The entry is made whether or not iTerm2 accepts, which is what bounds a
+                // refusal at one round trip rather than one per 100 ms pass.
+                if self.screen_subscribed.insert(session_id.to_string()) {
+                    let _ = self.client.watch_screen(session_id, true);
+                    self.due_reads.insert(session_id.to_string(), Due::AtOnce);
+                }
             }
-            return;
+            Some(mdview::JOB_NAME) => {
+                // So a later `hx` in this pane is subscribed afresh and read at once.
+                self.stop_reading_screen(session_id);
+                self.watch_command_line(session_id);
+                self.derive_command_line_file(session_id);
+            }
+            _ => {
+                self.stop_reading_screen(session_id);
+                if let Some(row) = self.rows.iter_mut().find(|r| r.session_id == session_id) {
+                    row.file = None;
+                }
+            }
         }
+    }
 
+    /// Cancels a session's screen subscription, if it has one, and drops any read it owes.
+    fn stop_reading_screen(&mut self, session_id: &str) {
         if self.screen_subscribed.remove(session_id) {
             let _ = self.client.watch_screen(session_id, false);
         }
         self.due_reads.remove(session_id);
+    }
+
+    /// Subscribes a session's `commandLine` and reads it once — **the first time only**, and
+    /// the read only if the subscribe was accepted (§2.19).
+    ///
+    /// Subscribe, then read: a change landing between the two is either in the value read or
+    /// a notification queued behind it, and `src/iterm/client.rs:Client::call` queues
+    /// notifications rather than dropping them. From then on the notifications keep the value
+    /// current, **which is what serves a loop**: `jobName` does not move between two mdviews
+    /// run back to back, and `commandLine` does. So this is one round trip per session that
+    /// ever runs mdview, and none per file after it.
+    ///
+    /// **A refused subscribe keeps nothing** — the pane reads plain `mdview` for the watcher's
+    /// life, rather than holding its first file in a value nothing would ever update.
+    fn watch_command_line(&mut self, session_id: &str) {
+        if !self.subscribed.insert((session_id.to_string(), COMMAND_LINE)) {
+            return;
+        }
+        if self.client.watch_variable(session_id, COMMAND_LINE).is_err() {
+            return;
+        }
+        let read = self.client.variables(session_id, &[COMMAND_LINE]);
+        log_read(self.reads_log.as_deref());
+        if let Ok(mut vars) = read
+            && let Some(value) = vars.remove(COMMAND_LINE)
+        {
+            self.command_lines.insert(session_id.to_string(), value);
+        }
+    }
+
+    /// Sets a row's [`Row::file`] to what its held command line names — the parser's answer,
+    /// or `None` when it answers nothing or no value is held. **Never "leave it as it was"**:
+    /// a command line cannot be covered for a moment the way a screen can.
+    fn derive_command_line_file(&mut self, session_id: &str) {
+        let file = self.command_lines.get(session_id).and_then(|line| mdview::open_file(line));
         if let Some(row) = self.rows.iter_mut().find(|r| r.session_id == session_id) {
-            row.file = None;
+            row.file = file;
         }
     }
 
@@ -376,7 +467,7 @@ impl Watcher {
     /// together cost several before the next command is looked at. That is §2.17's stated
     /// cost, and it is why one update does not mean one read.
     fn read_due_screens(&mut self) {
-        if !self.tracking_helix || self.due_reads.is_empty() {
+        if !self.tracking_files || self.due_reads.is_empty() {
             return;
         }
         let now = Instant::now();
@@ -552,6 +643,21 @@ impl Watcher {
                 return Ok(());
             };
             let value = v.json_new_value.as_deref().and_then(decode_json_value);
+            // **Stored before the row is looked for** (§2.19): a session outside the window
+            // stays subscribed, and a value dropped by the early return below would be stale
+            // when it came back. Only then, and only on an mdview row, does it derive a file.
+            if name == COMMAND_LINE {
+                match value {
+                    Some(line) => self.command_lines.insert(id.clone(), line),
+                    None => self.command_lines.remove(id),
+                };
+                if self.rows.iter().any(|r| {
+                    &r.session_id == id && r.process.as_deref() == Some(mdview::JOB_NAME)
+                }) {
+                    self.derive_command_line_file(id);
+                }
+                return Ok(());
+            }
             let Some(row) = self.rows.iter_mut().find(|r| &r.session_id == id) else {
                 // A session of another window, or one that has already left ours.
                 return Ok(());
@@ -559,10 +665,18 @@ impl Watcher {
             match name.as_str() {
                 "path" => row.path = value,
                 "jobName" => {
+                    // **A file never outlives the job that named it** (§2.19), and a change
+                    // means the value moved: `jobName` can go from `mdview` straight to `hx`
+                    // with no shell between, and a Helix row that inherited mdview's file
+                    // would keep it until a status line is read — for good if none ever is.
+                    // A notification carrying the value already held clears nothing.
+                    if row.process != value {
+                        row.file = None;
+                    }
                     row.process = value;
-                    // A job change can start or stop a Helix pane, and this is what either
-                    // one means: subscribe and read at once, or unsubscribe and clear.
-                    self.sync_helix(id);
+                    // A job change can start or stop either program, and this is what each
+                    // means: subscribe and read, derive, or unsubscribe.
+                    self.sync_files(id);
                 }
                 // Which is how a rename made in *another* Oko instance arrives here: one
                 // value on the session, seen by every client watching it, no sync protocol.
@@ -582,7 +696,7 @@ impl Watcher {
             // subscription on purpose and a cancel can be refused, so an update belonging to
             // no Helix row of ours must cost nothing: a shell's screen updates are exactly
             // this case, and they must cost no read.
-            if !self.tracking_helix
+            if !self.tracking_files
                 || !self.rows.iter().any(|r| {
                     &r.session_id == id && r.process.as_deref() == Some(helix::JOB_NAME)
                 })
@@ -656,8 +770,9 @@ impl Watcher {
                         vars.get("jobName").cloned(),
                         vars.get("path").cloned(),
                         vars.get(OKO_NAME).cloned(),
-                        // A session met for the first time has no file yet; the read the
-                        // sweep below schedules is what gives it one.
+                        // A session met for the first time has no file yet; the sweep below
+                        // is what gives it one — a screen read it schedules, or a command
+                        // line it subscribes and reads.
                         None,
                     )
                 }
@@ -689,10 +804,11 @@ impl Watcher {
 
         // After the assignment, because it reads the rows it acts on. Every row rather than
         // only the newly met ones: for a session already tracked it is a set lookup and costs
-        // no read, and it repairs a transition a dropped notification lost.
+        // no read, and it repairs a transition a dropped notification lost. **It clears no
+        // file it is merely confirming** — that clear is `apply`'s, on a job that moved.
         let sessions: Vec<String> = self.rows.iter().map(|r| r.session_id.clone()).collect();
         for session in sessions {
-            self.sync_helix(&session);
+            self.sync_files(&session);
         }
         Ok(())
     }
@@ -895,13 +1011,14 @@ fn log_emit(path: Option<&Path>) {
     log_timestamp(path);
 }
 
-/// One line per screen read, for the checks that bound what reading costs (§2.17).
+/// One line per screen read and per `commandLine` read, for the checks that bound what reading
+/// costs (§2.17, §2.19).
 ///
-/// The cost property — an idle Helix reads nothing, a busy one a bounded number of times — is
-/// invisible on screen, which is Phase 4's check 9 problem again and gets Phase 4's answer.
-/// **A timestamp and nothing else: no session id and no file name.** `wc -l` is all the gate
-/// reads, and a log of file names is a second record of what someone was editing that nothing
-/// needs.
+/// The cost properties — an idle Helix reads nothing, a busy one a bounded number of times; an
+/// mdview pane reads once ever, and never per file — are invisible on screen, which is Phase
+/// 4's check 9 problem again and gets Phase 4's answer. **A timestamp and nothing else: no
+/// session id, no file name and no command line.** `wc -l` is all the gate reads, and a log of
+/// file names is a second record of what someone was reading or editing that nothing needs.
 fn log_read(path: Option<&Path>) {
     log_timestamp(path);
 }

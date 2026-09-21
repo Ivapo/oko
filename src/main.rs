@@ -195,8 +195,9 @@ fn run() -> Result<()> {
     // **Here and in `src/follow.rs:run`, and in neither one-shot command** (§2.18).
     // `Watcher::connect` is shared by all four, and these are the two with somewhere to put
     // the file: this one draws it in the process cell, the stream publishes it as `file`. A
-    // one-shot command would pay a subscription per Helix pane to send one request and exit.
-    watcher.track_helix();
+    // one-shot command would pay a subscription per Helix or mdview pane to send one request
+    // and exit.
+    watcher.track_files();
     let initial = watcher.snapshot();
 
     let (events_tx, events_rx) = mpsc::channel();
