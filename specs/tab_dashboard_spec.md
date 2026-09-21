@@ -2,9 +2,9 @@
 id: oko-001
 title: tab-dashboard
 note: >
-  The iTerm2 dashboard tab — live per-tab directory, process, the file open in a Helix tab
-  and Claude Code status for every tab in the window, with Enter to jump to the selected
-  one.
+  The iTerm2 dashboard tab — live per-tab directory, process, the file open in a Helix or
+  mdview tab and Claude Code status for every tab in the window, with Enter to jump to the
+  selected one.
 status: accepted
 last_updated: 2026-09-20
 
@@ -1147,6 +1147,14 @@ that are being edited.
 
 **Three things this deliberately does not do**, inheriting §2.17's boundaries rather than
 re-arguing them: no `[+]`, no path — the base name and nothing else — and no editor but `hx`.
+
+**CORRECTED 2026-09-21 (Phase 11, which narrows the last of these for the stream).** "No
+editor but `hx`" still holds for what §2.17 reads off a screen, and nothing here reads another
+editor's. **But the stream now carries `file` for a second job**: §2.19 derives an mdview row's
+file from its `commandLine`, and `src/follow.rs:row_json` publishes it on a row whose job is
+`hx` **or** `mdview`, asking the same predicate the table asks. This section's argument carries
+over unchanged — a key an old consumer ignores does not make it wrong, so `schema` stays 1 —
+and its condition is still the job, never `file` being set.
 
 ### 2.19 What an mdview tab has open (decision, recorded — added by Phase 11)
 

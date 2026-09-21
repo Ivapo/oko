@@ -108,12 +108,12 @@ Subscriptions deliver `NOTIFY_ON_VARIABLE_CHANGE` (per session *and* variable),
 `NOTIFY_ON_SCREEN_UPDATE` takes a session and carries only its id; the screen comes from
 `GetBufferRequest` with `screen_contents_only` (`helix-file.md`).
 
-Oko subscribes `path`, `jobName` and `user.okoName` per session (`ROW_VARS`), plus layout and
-new-session. A session created after subscribing is not covered by the per-session ones, so it
-must be subscribed when its notification arrives. **The two variables have different latencies.**
-`jobName` is poll-driven: a 5.000 s `sleep` produced its two notifications 5.602 s apart.
-`path` is pushed on the `cd` itself — observed immediate to the eye, watching a pane and
-the table side by side (2026-08-15).
+Oko subscribes `path`, `jobName` and `user.okoName` per session (`ROW_VARS`), `commandLine` once
+a session runs mdview (`mdview-file.md`), plus layout and new-session. A session created after
+subscribing is not covered by the per-session ones, so it must be subscribed on arrival.
+**`path` and `jobName` have different latencies.** `jobName` is poll-driven: a 5.000 s `sleep`
+produced its two notifications 5.602 s apart. `path` is pushed on the `cd` itself — observed
+immediate to the eye, watching a pane and the table side by side (2026-08-15).
 
 Payloads differ in a way that decides how a client is built. `NewSessionNotification` and
 `TerminateSessionNotification` carry a `session_id` and nothing else — no window, no tab —

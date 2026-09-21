@@ -12,5 +12,7 @@
   what a Helix tab has open and how Oko knows — the gate on `jobName`, the screen subscription, the quiet window and the ceiling, the left-edge anchor and its uniqueness rule, the three answers and what each does to a row, which two entry points read, and what the stream carries
 - **[iterm-api](iterm-api.md)** — generated 2026-08-16 · 3 sources · 115/115 lines
   how Oko reaches the iTerm2 scripting API — the endpoint, how a human enables it, how a client authorizes and how a grant is reset, the transport, the session join key, and the variables it reads, writes and watches, the operations and the subscriptions
+- **[mdview-file](mdview-file.md)** — generated 2026-09-21 · 2 sources · 70/70 lines
+  what an mdview tab has open and how Oko knows — the gate on `jobName`, why the launch argument is the open file and the one mdview change that would end that, the subscription and the single read, the loop that makes it a subscription, the map kept for sessions outside the window, the parser's five rules and its two answers, the clear on a job change, and what the stream carries
 - **[session-commands](session-commands.md)** — generated 2026-08-16 · 2 sources · 71/72 lines
   what `oko` spells on the command line — the two things it does *to* a session, jump focus and set a name, the one place both are carried out and the two entry points that reach it, what an absent name means, why acting is a separate invocation from watching, and the flags answered ahead of any connection plus what an unrecognised one does

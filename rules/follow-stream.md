@@ -49,7 +49,7 @@ sorted, which is what makes the suppression rule below a string comparison.
 | `age` | `">5m"`, `">10m"`, `">30m"`, `">1h"`, or `null` under five minutes |
 | `claude` | `true`, **present only** on a row carrying a status |
 | `job` | `jobName` verbatim, **present only** on a row without one. 16-byte truncation and all |
-| `file` | a Helix file's base name, **present only** where `job` is `hx` and a status line has been read |
+| `file` | the open file's base name, **present only** where `job` is `hx` or `mdview` and the file is known |
 
 `claude` and `job` are exclusive; `file` is the third conditional key (`src/follow.rs:row_json`),
 and it arrived under **`schema: 1`** — a key an old consumer ignores does not make it wrong.

@@ -63,8 +63,8 @@ read per notification would be one round trip per keystroke. Instead a session i
 Nothing is asked for on a timer. The check runs on **every** pass of
 `src/iterm/watch.rs:Watcher::run`, not only the passes that carried a notification — the read
 that matters is the one after the updates stop. **An idle Helix costs nothing**: no updates,
-no reads. `OKO_DEBUG_READS` appends one timestamp per read to `~/.oko/reads.log`
-(`src/iterm/watch.rs:log_read`) — no session id and no file name.
+no reads. `OKO_DEBUG_READS` appends a timestamp per read, mdview's `commandLine` read included,
+to `~/.oko/reads.log` (`src/iterm/watch.rs:log_read`) — no session id and no file name.
 
 ## The line is found by where it starts
 
@@ -105,7 +105,7 @@ is unsubscribed and its file cleared in the same pass.
 
 ## Two readers, and what the stream carries
 
-`src/iterm/watch.rs:Watcher::track_helix` is called from `src/main.rs:run`'s dashboard branch
+`src/iterm/watch.rs:Watcher::track_files` is called from `src/main.rs:run`'s dashboard branch
 and from `src/follow.rs:run`, and from **neither one-shot command**: `--activate` and
 `--set-name` connect, act and exit without subscribing any screen, which would cost a round trip
 per Helix pane in order to send one request.

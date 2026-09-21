@@ -49,8 +49,8 @@ job in the session's *foreground process group* — some descendant for a Claude
 server sits outside that group and which `deepestJob` alone descends into. What makes a row
 read `claude` is a status file for its session id (`claude-status.md`), nothing else.
 
-**One row type reads two words.** A row with no status whose `jobName` is `hx` reads
-`hx <file>` — the file open in that Helix pane, cut by the same 17 cells (`helix-file.md`).
+**Two row types read two words.** A row with no status whose job is `hx` or `mdview` reads
+`hx <file>` or `mdview <file>`, cut by the same 17 cells (`helix-file.md`, `mdview-file.md`).
 
 A session missing `path` or `jobName` renders `-` in that cell rather than an empty or
 omitted row. A row with no status renders **empty** there instead: a plain tab has no

@@ -37,6 +37,12 @@ and the default one.** Move or remove the mode or position elements of
 with no file — absent rather than wrong, which is the one thing this is built to guarantee.
 No other editor is covered, and nothing else of the screen is read or shown.
 
+**So does an [mdview](https://github.com/Ivapo/mdview) tab**, as `mdview notes.md` — and
+here nothing on screen is read at all. mdview holds one file for its whole life, so the file is
+its launch argument, which iTerm2 reports itself; a loop of mdviews is followed file by file.
+An mdview reached through a symlink or `exec -a`, or given a name that iTerm2 can only write
+with an escape, reads plain `mdview`: absent, never a guessed name.
+
 The `status` column is the reason the tool exists: with three agents running, it says which
 one is blocked without your visiting all three.
 
@@ -148,9 +154,9 @@ oko --follow          # newline-delimited JSON on stdout, no terminal involved
 The first line names the build and the schema — `{"oko":"0.4.0","schema":1}` — and every line
 after it is one snapshot: `window_number`, and a `rows` array carrying `session_id`, `tab`,
 `name`, `path`, `status` and `age`, plus `claude: true` for a Claude row or `job` for a plain
-one, and `file` — the open file's base name — on a row whose `job` is `hx`. Ages are the same
-buckets the table shows, never a second count, and a line identical to the one before it is not
-written, so the stream is as quiet as the dashboard is.
+one, and `file` — the open file's base name — on a row whose `job` is `hx` or `mdview`. Ages are
+the same buckets the table shows, never a second count, and a line identical to the one before
+it is not written, so the stream is as quiet as the dashboard is.
 
 **Three promises to a consumer.** It opens with the current state rather than waiting for
 something to move; a `schema` you do not recognise means show nothing rather than a half-drawn
@@ -210,6 +216,8 @@ oko-probe                       # identity, then the sessions of this window, he
 oko-probe watch                 # print iTerm2 notifications as they arrive
 oko-probe hx                    # every Helix pane: its job names, its screen, and the
                                 # file Oko reads off it
+oko-probe mdview                # every mdview pane: its command line, and the file Oko
+                                # reads off it
 oko-probe screen-watch <s>...   # one line per screen update, with the gap
 ```
 
