@@ -66,7 +66,7 @@ phases:
     by: null
   - name: "Phase 12 — ready is not idle: work left running in the background"
     reviewed: 2026-10-18
-    shipped: null
+    shipped: 2026-10-18
     cut: null
     by: null
 
@@ -1444,6 +1444,14 @@ that work running unattended.
   between; the table does not show it (below), so this is a diagnostic's precision and not a
   claim a human reads.
 
+**CORRECTED 2026-10-18 (Phase 12's close-out, from gate check 10).** The first hole is no
+longer conditional: **stopping a task from `/tasks` wakes nothing.** Pressing `x` on a running
+`sleep 300` in the interactive dialog removed it from Claude Code's "1 shell still running"
+footer, fired no hook, and left the file at `background: 1` and the row at `◔ background` for
+the 34 s until the next prompt. So the bound is the one this bullet names — the human who just
+stopped it is at the keyboard, and their next prompt writes `working` and its `Stop` writes the
+list as it now is, which gate check 10's second half saw end in `○ ready`.
+
 **Three choices, each a decision.**
 
 - **The word is `background`, and the column widens to hold it.** `◔ background >10m` is
@@ -2169,6 +2177,9 @@ field. And no change to `waiting`, `working` or `stale`.
   might fire no `UserPromptSubmit` and read `background` throughout; it reads `working`. The
   subagent row is the finding the round did not expect, and §2.20 now states it. **Headless,
   not interactive** — gate checks 2–6 are where the interactive session is seen to agree.
+  **(c) RESOLVED 2026-10-18, at Phase 12's close-out, by gate check 10: nothing fires.** A shell
+  stopped from `/tasks` leaves the list silently; no hook runs until the human's next prompt,
+  and the `Stop` that ends it lists nothing. §2.20's first hole now says so.
   *(needs measurement — blocked Phase 12)* §2.20 clears `background` on the `Stop` that ends the turn a
   finished task wakes, and the reference states neither that a shell's or a monitor's completion
   starts a turn nor which hooks that turn fires. Measured in the same round with the same
@@ -4195,3 +4206,29 @@ derived design exists for.*
   first, then the status file, then the hook and its fixtures, then the table and the stream,
   then rules, README, `CLAUDE.md` and the dated notes. **One push.** The release is its own
   `chore:` commit afterwards, as 0.3.0 through 0.5.0 were.
+
+**CORRECTED 2026-10-18 (at the close-out, from running this gate).** **The gate passed on all
+twelve checks.** Three things about how it was run, none of which excuses a failure:
+
+- **The first attempt ran into a screen lock**, Phase 11's precondition again: every
+  AppleScript call to iTerm2 took 9–35 s. Checks 1 and 2 had already read the right
+  sequences, but the run of record was taken afterwards, unlocked, from check 1.
+- **Tab 1 was not split.** On a 1280-pixel display a vertical split gives each pane 78
+  columns, under the 80 check 8 needs, so O was closed and the window sized to give the
+  dashboard **81** columns. The runner drove C and read the cell over AppleScript instead of
+  from O; check 9's pane was a horizontal split, which kept the width.
+- **`claude` ran with `--allowedTools` covering `Bash(sleep *)`, `Monitor`, `Agent`,
+  `CronCreate`, `CronDelete` and `TaskStop`**, so no permission dialog could put a `waiting`
+  into an exact `st` sequence. The session was in auto mode, and no dialog appeared.
+
+**What the run of record measured.** `st` read exactly the expected sequence in checks 2–6:
+four lines for each single task and six for check 5's two. Every transition reached the
+stream between **0.12 and 0.20 s** after the status file's mtime, timed by a reader stamping
+each stream line as it arrived. The cell, polled over AppleScript, agreed every time, with
+the poll's own overhead on top. Check 4 saw §2.20's subagent row: `◔ background` for 7 s after
+the `Stop`, then `◐ working` from the subagent's first tool call until the woken turn ended.
+Check 7's `CronCreate` ran (`c1ac592d`) and the row read `○ ready`. Check 8 read
+`◔ background >5m` untruncated, at five minutes to the second. Check 9's 0.5.0 dashboard drew
+C as `claude`, `○ ready`. Check 10 is OQ-19 (c)'s answer, above. Check 11's panex card read
+`✻ claude · background`. Check 12: `--print-settings` was identical apart from the path; tests
+were **59 / 23 / 35** against 55 / 17 / 32; clippy and spec-lint were clean.

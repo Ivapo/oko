@@ -149,5 +149,5 @@ background subagent's tool calls write `working` while it works. Crons do not co
   `Notification`'s ~6 s delay is treated as a filter instead.
 - Unsettled: whether Claude Code runs other tools in a batch while a permission dialog is
   open, which would let a `PostToolUse` overwrite a live `waiting`.
-- **A background task that ends without waking the agent leaves `background`** until the
-  next event — a human's next prompt writes `working`.
+- **A background task stopped from `/tasks` fires nothing**, so the row says `background`
+  until the human's next prompt, whose `Stop` lists only what still runs.
