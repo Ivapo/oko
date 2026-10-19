@@ -6,7 +6,7 @@ note: >
   mdview tab and Claude Code status for every tab in the window, with Enter to jump to the
   selected one.
 status: accepted
-last_updated: 2026-09-21
+last_updated: 2026-10-18
 
 phases:
   - name: "Phase 1 — transport spike: reach the iTerm2 API from Rust"
@@ -62,6 +62,11 @@ phases:
   - name: "Phase 11 — what an mdview tab has open"
     reviewed: 2026-09-20
     shipped: 2026-09-21
+    cut: null
+    by: null
+  - name: "Phase 12 — ready is not idle: work left running in the background"
+    reviewed: 2026-10-18
+    shipped: null
     cut: null
     by: null
 
@@ -1326,6 +1331,143 @@ because the source is iTerm2's rather than mdview's. No other pager or viewer: `
 program and not a property of readers. And nothing for mdview reached through a symlink or run
 over `ssh`: the first answers nothing by the parser's first rule, the second has job `ssh`.
 
+### 2.20 Ready is not idle: work left running in the background (decision, recorded — added by Phase 12)
+
+§2.3 writes `ready` on `Stop`, and its table glosses that as "the turn finished; ready for the
+next prompt". **The two halves of that gloss have come apart.** Claude Code can now end a turn
+while work the turn started goes on running — a Bash command run with `run_in_background`, a
+`Monitor`, a background subagent — and when that work finishes, Claude Code wakes the agent
+without a human typing anything. A row in that state reads `○ ready`, the same as a session
+nobody has touched in hours, and the author reported on 2026-10-18 that it reads as a lie: an
+agent with a build or a monitor still running is not one a human can treat as done. The words
+are the author's: "**some sessions show 'ready' but in reality they are still running a shell or
+a monitor**".
+
+**The fact that makes this buildable is that `Stop` is told.** Claude Code's hooks reference
+(`code.claude.com/docs/en/hooks`, "Stop input", read 2026-10-18 against Claude Code 2.1.303)
+documents a `background_tasks` array on `Stop`'s input: one entry per background task, each
+with an `id`, a `type` — `shell`, `subagent`, `monitor`, `workflow`, `teammate`, a cloud
+session, an MCP task — a `status` and a `description`. **No event this hook registers carries it, and none fires
+for a background shell or `Monitor` starting or finishing.** The reference's other near
+misses are each narrower or unregistered: `SubagentStart` and `SubagentStop`, the second also
+carrying `background_tasks` but firing for subagents alone; `PostToolUse` on `Agent`, whose
+`tool_response` says `async_launched`; and `Notification`'s `agent_completed`, which fires
+only while agent view is open. So the one place to learn this is the one place
+`ready` is already decided, and the hook needs no new registration: `Stop` is registered bare
+today (§2.3), so every user's existing `settings.json` already delivers the field.
+**OQ-18 measured it before a line was written**, because the reference documents the array's
+keys and not the values `status` takes: a running task is `"running"`, a finished one leaves
+the list, and a turn with nothing running carries `[]`. **A `Monitor` is listed as `"shell"`**,
+not `"monitor"` as the reference has it, which this design is indifferent to because it counts
+by `status` and never by `type`.
+
+**So a turn that ends with work still running shows a fifth value, `◔ background`.** It is the
+`ready` of a session with something left running, and it says exactly that: the agent will take
+a prompt — a human can type into it now — and it will also come back on its own. It is not
+`working`, which would claim the agent is doing something, and it is not `waiting`, which would
+claim it is blocked on a human: both would recreate the confidently-wrong failure §2.7 rejects
+screen-scraping to avoid, in the opposite direction.
+
+**`background` is derived at read time, never written — `stale`'s shape exactly.** The file
+keeps saying `ready` and gains one optional key, `background`, the count of tasks still running
+when `Stop` fired: **absent when there are none**, as `tool` is absent when there is no tool
+(§2.12). `src/status.rs:Entry::shown` derives the shown value: a `ready` whose count is above
+zero shows `background`. **The argument is version skew, and it is measured rather than
+assumed.** The hook and the dashboard are separate binaries and nothing makes them the same
+build: `~/.claude/settings.json` names `~/.cargo/bin/oko-hook`, and a dashboard started before
+a `cargo install` keeps running the old `oko`. `src/status.rs:Store::refresh` keeps an entry
+only if `Entry::from_json` parses it, and `from_json` refuses a `status` word it does not know —
+so a hook that *wrote* `"status":"background"` would make every older dashboard **drop that row
+from the status column entirely**, turning a Claude tab into a plain one. An unknown key is
+ignored by the same function, so the derived design reads `ready` on an old dashboard — this
+phase's absence, not a wrong answer — and an old file, which has no key, reads `ready` on a new
+one. Gate check 9 runs the old build against the new hook to see it.
+
+**One rule decides the key, and it is §2.12's rule with the event changed: `Stop` and
+`StopFailure` set it, and every other event clears it.** `src/status.rs:write` builds a whole
+`Entry`, so there is no "leave this field alone", and enumerating ten answers would leave the
+eleventh event to a guess. The field is consulted only on `ready`, and the only other writer of
+`ready` is `SessionStart`, which carries no `background_tasks` and writes none. **`StopFailure`
+is in the rule though the reference documents the array on `Stop` alone**: an API error that
+ends a turn does not stop the shells it started, and an absent array reads as zero — today's
+`ready` — so registering the read there costs nothing if the field never arrives. Every other
+event writes `working` or `waiting`, on which the field means nothing.
+
+**What clears it is the next `Stop`, and that is why the mechanism is sound rather than
+hopeful.** A background task finishing is not an event, but its consequence is: Claude Code
+re-invokes the agent with the task's notification, that turn ends in another `Stop`, and that
+`Stop` carries the list as it is *then* — shorter by the task that finished. **And the woken turn
+opens with a `UserPromptSubmit`** whose prompt is the `<task-notification>`, so the row reads
+`working` while the agent handles it, exactly as for a typed prompt. So a row goes
+`background` → `working` → `background` with one fewer task, or `ready`. **OQ-19 measured this
+for all four kinds** — a shell finishing, a `Monitor` whose command ends, a `Monitor` reaching its
+deadline, a background subagent reporting — one woken turn per task, each opened by
+`UserPromptSubmit` and closed by a `Stop` whose list no longer holds that task.
+
+**A background subagent writes `working` over `background` while it works.** Its own tool
+calls fire the parent session's `PreToolUse` and `PostToolUse`, carrying an `agent_id` (OQ-19),
+and §2.3's table writes `working` for them as it has since Phase 3. So that row reads
+`◔ background` from the `Stop` until the subagent's first tool call, then `◐ working` until the
+woken turn ends. **That is left as it is**, because it is not a lie — something in that tab is
+doing work — and because the obvious fix, ignoring events that carry `agent_id`, would also
+stop a *foreground* subagent's tool calls refreshing the row, and a long one would go `stale`
+mid-turn. The cost is the clock: a background subagent that goes quiet for ten minutes between
+tool calls ages its row to `stale`, which the woken turn's `Stop` corrects.
+
+**It never goes stale, and it carries the age.** It is a `ready`, and `ready` is exempt
+(OQ-4 (c)) for the reason that still holds: a session idle for hours is a true answer. A dev
+server left running all afternoon is a true `◔ background >1h`. §2.11's one clock applies
+unchanged — `now - at`, time since the `Stop` — so the age reads as how long the agent has left
+that work running unattended.
+
+**The holes, stated.**
+
+- **A task that ends without waking the agent leaves the row saying `background`** until the
+  next event. A human stopping a task from `/tasks` is the one case OQ-19 could not measure
+  headless, and gate check 10 records what it does; if it wakes nothing, the bound is the human,
+  who is at the keyboard by construction and whose next prompt writes `working`.
+- **A `Monitor`'s deadline does wake the agent** (OQ-19), with "Monitor expired after 15s" as
+  the notification, so it is not this hole. Whatever Claude Code reports to the agent wakes it;
+  whatever it does not is the bullet above.
+- **The count is a count at `Stop`**, so it is exact at the moment it was written and nothing in
+  between; the table does not show it (below), so this is a diagnostic's precision and not a
+  claim a human reads.
+
+**Three choices, each a decision.**
+
+- **The word is `background`, and the column widens to hold it.** `◔ background >10m` is
+  1 + 1 + 10 + 1 + 4 = **17** cells against `STATUS_WIDTH`'s 14, so `src/ui.rs:STATUS_WIDTH`
+  becomes 17, measured by the test that measures it today. The shorter words were each wrong:
+  `running` and `busy` claim the agent is occupied, which is false — it takes a prompt — and
+  `running` is a near-synonym of `working` on a column whose whole value is that its words do
+  not overlap; `bg` is jargon on a table read at a glance. The cost is three cells taken from
+  `where`, the one `Min` column, and the width below which `where`'s `Min(10)` starts to squeeze
+  the process column moves from about 73 to about 76.
+- **The table and the stream carry the word, not the count.** The count is in the file because
+  the hook has it for free and the gate needs to see it; a human reading "2" learns nothing
+  `/tasks` in that tab does not say better, and a stream field no consumer has asked for is
+  §2.18's rule broken in the other direction. Either can be added when someone wants it.
+- **`session_crons` does not count.** `Stop`'s input carries it beside `background_tasks`, and a
+  `/loop` or a scheduled wakeup will also bring the agent back on its own. But a cron is a time,
+  not a process: nothing is running, and the row's question is what this agent is doing *now*.
+  A session whose only pending thing is a wakeup reads `ready`.
+
+**On the stream it is a fifth value of `status`, under `schema: 1`.** §2.18's test is whether a
+change makes an old reader *wrong*. `status` is the **effective** value already (`stale` is
+derived and published), so a derived `background` is published by the same line of
+`src/follow.rs:row_json` without a change there. **The one consumer is measured, not assumed**:
+panex-tui's `status_style`, in `crates/panex-tui/src/ui.rs`, matches the four words it knows and ends
+in an arm whose comment reads "a status this build does not know is still worth showing as
+text", so its card draws `· background` in grey — the true word, with no glyph of its own until
+panex-tui gives it one. Nothing breaks, so nothing is bumped.
+
+**What this does not do.** No list of the tasks and no description of one — `/tasks` in the tab
+is one Enter away, which is what the dashboard is for. No process-tree inspection: a background
+shell *is* visible as a child of `claude`, recognisable by the `~/.claude/shell-snapshots/`
+path its command line sources (observed 2026-10-18), but that path is Claude Code's internal
+detail, a monitor or subagent is not a shell, and the hook is told the answer in a documented
+field. And no change to `waiting`, `working` or `stale`.
+
 ## 3. Open questions
 
 - **OQ-1 — How does a Rust binary reach the iTerm2 API?** **RESOLVED 2026-08-14 by Phase
@@ -1956,6 +2098,76 @@ over `ssh`: the first answers nothing by the parser's first rule, the second has
   `jobPid` — which the same measurement saw change on every file of the loop — subscribed the
   same way, with a `commandLine` read on each change: one round trip per mdview start rather
   than none. That would be a change to §2.19 made in the review round, before any code.
+- **OQ-18 — What does `Stop`'s `background_tasks` hold, and which `status` values mean "still
+  running"?** **RESOLVED 2026-10-18, during Phase 12's review round: one word, `"running"`; a
+  finished task leaves the list; nothing running is `[]`, never an absent key.** Measured
+  against Claude Code 2.1.303, headless (`claude -p`, Sonnet), in scratch projects whose
+  `.claude/settings.json` registered a capture hook on `Stop`, `StopFailure`,
+  `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `SessionEnd`, with `TERM_SESSION_ID` and
+  `ITERM_SESSION_ID` unset so the real `oko-hook` wrote nothing. Each turn's `Stop` saw:
+
+  | case | `background_tasks` at the turn's `Stop` |
+  |---|---|
+  | (a) nothing | `[]` |
+  | (b) a `run_in_background` shell | `[{"id":"bzoff0jnj","type":"shell","status":"running","description":"Run sleep in background","command":"sleep 30"}]` |
+  | (c) a `Monitor` | `[{"id":"b18qut1lj","type":"shell","status":"running","description":"sleep 20 then echo done","command":"sleep 20; echo done"}]` |
+  | (d) a background subagent | `[{"id":"a7400e40a873f4913","type":"subagent","status":"running","description":"Sleep then report","agent_type":"general-purpose"}]` |
+  | (e) after (b)'s shell finished and was reported | `[]` |
+  | two shells, at launch / after the first / after both | two `running` entries / the second alone / `[]` |
+
+  **The rest of a `Stop` payload**, from (b): `session_id`, `transcript_path`, `cwd`,
+  `prompt_id`, `permission_mode`, `effort` (`{"level":"medium"}`), `hook_event_name`,
+  `stop_hook_active`, `background_tasks`, `session_crons` (`[]` in every case) — and
+  `last_assistant_message`. **These rows are Phase 12's fixtures**: the hook's tests build each
+  `Stop` from the array in its row, and `"status":"running"` is the only word counted. Two
+  things the reference had otherwise: **a `Monitor` is `type: "shell"`**, not `"monitor"` —
+  which the count is indifferent to, since it never reads `type` — and **no `status` but
+  `running` was ever seen**, so a future word for a task not yet started, or one finished and
+  lingering, fails *off*: it counts as nothing, and the row reads today's `ready`. **(a) is
+  also the version answer**: the field is delivered, so §2.20 is plannable as written.
+  *(needs measurement — blocked Phase 12)* §2.20 reads one documented field, and the
+  documentation stops at its keys. Settle it in Phase 12's review round, as OQ-17 was settled in
+  Phase 11's, before any code: register a throwaway `Stop` hook beside `oko-hook` — a one-line
+  command appending its stdin to a file under `/tmp` — in a **scratch session's** project
+  `.claude/settings.json`, never the global one, and capture the `Stop` payload of four turns,
+  each of which ends with: **(a)** nothing in the background; **(b)** one `run_in_background`
+  shell running; **(c)** one `Monitor` running; **(d)** one background subagent running. Then
+  **(e)** a turn ending after a background shell has *finished* and been reported, to see whether
+  a finished task leaves the list or stays in it with another `status`. Record the Claude Code
+  version, every `status` value seen and what it meant, and whether the key is absent or `[]`
+  in (a). **The answer is a set of words, and Phase 12's hook counts exactly that set** —
+  written into §2.20 and into `src/bin/oko-hook.rs` as a literal, with the payloads kept as the
+  hook's test fixtures. **If the array is not delivered at all**, §2.20 is not plannable as
+  written and the phase stops there: the candidate replacement is the process tree its last
+  paragraph declines, and that is a decision to reopen in the review round, not one to slide
+  into at implementation time.
+- **OQ-19 — Does the work finishing end in a `Stop`, and what fires before it?** **RESOLVED
+  2026-10-18, during Phase 12's review round, for (a) and (b): every completion wakes the agent
+  into one turn, opened by `UserPromptSubmit` and closed by `Stop`. (c) is left to gate check
+  10**, being interactive-only and deciding nothing but a sentence. Measured in OQ-18's runs:
+
+  | what ended | the woken turn's events, in order |
+  |---|---|
+  | a shell, `sleep 30` | `UserPromptSubmit` (prompt `<task-notification>…`), `Stop` with `[]` |
+  | a `Monitor` whose command exited | the same |
+  | a `Monitor` at its `timeout_ms` of 15 s, over `sleep 120` | the same; the notification reads "Monitor expired after 15s with no events delivered" |
+  | a background subagent | **before** it: the subagent's own `PreToolUse` / `PostToolUse` (`Bash`), each carrying `agent_id` and `agent_type`; then `UserPromptSubmit`, `Stop` with `[]` |
+  | two shells, 15 s and 45 s | one woken turn per shell; the first's `Stop` still lists the second |
+
+  **So the design holds, and one sentence of §2.20 was wrong**: it expected a woken shell turn
+  might fire no `UserPromptSubmit` and read `background` throughout; it reads `working`. The
+  subagent row is the finding the round did not expect, and §2.20 now states it. **Headless,
+  not interactive** — gate checks 2–6 are where the interactive session is seen to agree.
+  *(needs measurement — blocked Phase 12)* §2.20 clears `background` on the `Stop` that ends the turn a
+  finished task wakes, and the reference states neither that a shell's or a monitor's completion
+  starts a turn nor which hooks that turn fires. Measured in the same round with the same
+  capture hook, extended to `UserPromptSubmit` and `PreToolUse`: **(a)** a background shell
+  finishing — whether a turn starts, whether `UserPromptSubmit` fires for it, and whether it ends
+  in a `Stop` whose list no longer holds that shell; **(b)** a `Monitor` reaching its `timeout_ms`
+  deadline, the same three; **(c)** a human stopping a running shell from `/tasks` — whether
+  anything fires at all. **(a) and (b) decide whether the design holds**: a completion that
+  wakes the agent and ends in no `Stop` leaves every such row `background` until a human acts,
+  which is today's lie inverted. **(c) decides only how the first hole in §2.20 is worded.**
 
 ## 4. Implementation phases
 
@@ -3782,3 +3994,193 @@ between, and the cell read `hx`, never `hx plain.md`. **OQ-17 stands as resolved
 `commandLine` in the same millisecond, and every start in an already-subscribed pane drew its
 one line of plain `mdview`. **And check 4 measured what §2.19 left open**: an argument needing
 both quotes is written bare with backslashes — `mdview both\'\"q.md` — which the parser refuses.
+
+### Phase 12 — ready is not idle: work left running in the background
+
+*Produces the observable: **yes**, and it changes the observable's own sentence: a Claude Code
+tab is working, waiting for input, ready for a prompt, **or ready with work it started still
+running in the background**. After this phase a turn that ends with a background shell, a
+`Monitor` or a background subagent still running reads `◔ background`, not `○ ready`, and
+reads `○ ready` again once the last of that work has finished and the agent's woken turn has
+ended. **The risk is the inverse of the one this fixes**: a row left saying `background` after
+the work is gone, which is why the gate spends its checks on the clearing — one task, two tasks
+finishing at different times, a prompt typed in between — and on the version skew §2.20's
+derived design exists for.*
+
+- **Scope.**
+  - ~~Settle OQ-18 and OQ-19 in this phase's review round, not during implementation.~~
+    Settled 2026-10-18, in that round: the one word counted is `"running"` (OQ-18), and every
+    completion wakes a turn that opens with `UserPromptSubmit` and closes with `Stop` (OQ-19).
+    The capture hook lived in scratch projects and went with them; nothing here edits
+    `~/.claude/settings.json`. **The hook's fixtures are OQ-18's table**: each test builds a
+    `Stop` event from that row's `background_tasks` array, verbatim.
+  - **The status file** (`src/status.rs`).
+    - **`Entry` gains `background: u32`**, the count of background tasks running when `Stop`
+      fired. `Entry::to_json` writes it **only when it is above zero**, as it writes `tool` only
+      when there is one; `Entry::from_json` reads it through an optional accessor, and a missing
+      or non-numeric value is **zero** — "nothing running", never a corrupt file, for the reason
+      a missing `tool` is "no tool".
+    - **`Status` gains `Background`** — word `background`, glyph `◔`. **Derived, never written**:
+      `as_written` answers `None` for it beside `Stale`, and `parse` does not know the word.
+      `Entry::shown` derives it: a written `Ready` whose `background` is above zero shows
+      `Background`, carrying the same `Age::bucket` every status carries. It never goes stale —
+      only a `Working` ages out, and that test is unchanged.
+    - **Tests**: `background_is_derived_and_never_written` (a `Background` entry fails
+      `to_json`, and a file whose `status` is `"background"` fails `from_json`);
+      `a_ready_with_work_running_shows_background_and_never_ages` (a `ready` with `background: 1`
+      written two hours ago shows `Background` with `Age::H1`, and the same entry with
+      `background: 0` shows `Ready`); `the_background_key_is_absent_at_zero` (a zero count writes
+      no key; a file Phase 3 wrote, with neither `tool` nor `background`, reads as zero).
+  - **The hook** (`src/bin/oko-hook.rs`).
+    - **`action`'s `Stop` | `StopFailure` arm counts** the entries of the event's
+      `background_tasks` array whose `status` is one of OQ-18's words, held as a literal beside
+      the arm with OQ-18 cited. A missing array, an empty one, or an entry with no `status` adds
+      nothing. **`session_crons` is not read** (§2.20).
+    - **`Action::Write` carries the count beside the status and the tool**, and `run` puts it in
+      the `Entry`. Every arm but that one writes zero, and the `idle` closure is where that is
+      said once — §2.20's rule is total over §2.3's table by construction, as §2.12's is.
+    - **`settings_block` does not change**: `Stop` and `StopFailure` are registered bare
+      already, so no user re-pastes anything, and the `--print-settings` output is byte-for-byte
+      what 0.5.0 prints — check 12 compares them.
+    - **Tests**: `only_stop_records_background_work`, built as `only_pre_tool_use_records_a_tool`
+      is — `Stop` with OQ-18 (b)'s fixture writes `(Ready, None, 1)`, `StopFailure` given the
+      same array writes the same, and **every other event in the table writes zero even when
+      handed that same array**, which no real event carries and which is what proves the rule is
+      the event's and not the field's; `a_stop_with_nothing_running_is_plain_ready`, over
+      fixtures (a) and (e) and an event with no `background_tasks` key at all;
+      `a_cron_is_not_background_work`, a `Stop` whose `session_crons` holds one entry and whose
+      `background_tasks` is empty, which writes zero. The existing test helper `written` returns
+      the count too, and `only_pre_tool_use_records_a_tool` follows mechanically.
+  - **The table** (`src/ui.rs`). `STATUS_WIDTH` becomes **17** and its doc comment counts
+    `◔ background >10m` — 1 + 1 + 10 + 1 + 4. `render_status` draws `Background` in
+    **`Color::Blue`**: not `Green`, which is `ready`'s and would say "done" in colour while the
+    word said otherwise, and not `Cyan`, `working`'s. The word is in the plain voice, not
+    dimmed — unlike `stale`, it is a claim about the agent. `the_status_column_holds_the_widest_cell_the_ladder_can_produce`
+    iterates over `Background` too, and its literal becomes 17.
+  - **The stream** (`src/follow.rs`). **No change to `row_json`'s code**: it publishes
+    `shown.status.word()`, so the derived value is published as `stale` is. Its doc comment's
+    sentence on the effective value — "`stale` included" — names `background` beside it, and
+    `background_is_a_status_the_stream_publishes` sits beside
+    `stale_is_a_status_the_stream_publishes`. `SCHEMA` stays 1 (§2.20).
+  - **The prose this makes false is corrected in the same pass**: `src/status.rs`'s module
+    documentation and `Status::Ready`'s ("the turn is over; ready for the next prompt"),
+    `Age`'s and `Entry::shown`'s "four statuses", `Entry::tool`'s "`waiting` and `ready` never
+    age", `src/ui.rs:render_status`'s "the other three", `src/follow.rs:row_json`'s "`stale` included", and
+    the comment on `action`'s `Stop` arm.
+  - **Not in scope, each a decision rather than an omission:** no count, task list or
+    description on the table or the stream; no process-tree inspection; nothing for
+    `session_crons`; no new hook registration; no change to `working`, `waiting` or `stale` or
+    to either staleness clock; and nothing in panex-tui, whose fallback arm already draws the
+    word (§2.20), and which needs its own glyph for it if it wants one.
+- **Exit gate.** **Runs in a fresh window, with the screen unlocked** (Phase 11's close-out),
+  and **against the installed build**: the hook Claude Code runs is the one
+  `~/.claude/settings.json` names, `~/.cargo/bin/oko-hook`, so the code under test reaches
+  these checks only through `cargo install --path .`, done first. A Claude session already open
+  picks it up on its next hook firing, since the path does not change. **Every `oko` below is
+  that installed build.** The old build is `37da13e`, the 0.5.0 release:
+  `git worktree add /tmp/oko-12-old 37da13e`, `cargo build` there, and let
+  `OLD=/tmp/oko-12-old/target/debug/oko`.
+  - **Two tabs.** Tab 1 is split: the dashboard, `oko`, in a pane **at least 80 columns wide**,
+    and **O**, the observer. Tab 2 is split: `oko --follow > /tmp/oko-12.jsonl`, and **C**, a
+    shell in a new empty directory `/tmp/oko-12/`, where the runner first takes
+    `echo ${TERM_SESSION_ID#*:}` and sets `C` to it in O, and then starts `claude`.
+  - **Two helpers, in O.** `mark` as Phase 11 defines it, over `/tmp/oko-12.jsonl`;
+    `st() { tail -n +"$1" /tmp/oko-12.jsonl | jq -r --arg id "$C" 'select(.rows?) | .rows[] | select(.session_id == $id) | .status' | sed -n '/^working$/,$p' | uniq; }`,
+    C's status on every snapshot since line `$1`, **from its first `working`**, repeats
+    collapsed — so a snapshot some other row writes between `mark` and the prompt, carrying C's
+    `ready`, is not read as part of the check; and
+    `f() { jq -c '{status, background}' ~/.oko/status/$C.json; }`, the file as written.
+  - **Each prompt below is typed into C verbatim**, and "the turn ends" means Claude Code's
+    prompt is back. **"Within 2 seconds"** is the watcher's tick, which re-reads
+    `~/.oko/status` when its mtime moves, with the hook's own start-up as margin.
+  1. **Nothing running is `ready`, as before.** Prompt `say hi`. When the turn ends: within 2
+     seconds C's cell reads `○ ready`, and `f` prints `{"status":"ready","background":null}`.
+  2. **A background shell reads `background`, and `ready` once it ends.** `n=$(mark)`. Prompt
+     `Run "sleep 90" with run_in_background, then end your turn without waiting for it.` When
+     the turn ends: within 2 seconds the cell reads `◔ background` and `f` prints
+     `{"status":"ready","background":1}`. **Then wait**: when the sleep finishes, Claude is
+     woken, and that turn ends, the cell reads `○ ready` within 2 seconds and `f` prints
+     `background: null`. `st $n` reads **exactly** `working`, `background`, `working`, `ready` —
+     the prompt, the `Stop`, the woken turn's `UserPromptSubmit` (OQ-19), its `Stop`. A `ready`
+     anywhere but last is a hook that wrote the status before the count.
+  3. **A `Monitor`, the same.** `n=$(mark)`. Prompt
+     `Start a Monitor on "sleep 60; echo done", then end your turn.` The same three outcomes as
+     check 2, with the same `st $n` shape.
+  4. **A background subagent, the same.** `n=$(mark)`. Prompt
+     `Launch a background agent whose only job is to run "sleep 60" and report back; end your turn without waiting.`
+     The same outcomes and the same `st $n`, **with one difference in where its middle
+     `working` begins**: the subagent's own tool calls write it (§2.20), so the cell may leave
+     `◔ background` for `◐ working` before the report arrives. Whatever the order of those calls
+     against the `Stop`, the collapsed sequence is the same four lines, and `background` appears
+     in it — the `Stop` always writes it. **One race can hide it**: a subagent `PreToolUse`
+     landing within one 100 ms tick (`src/iterm/watch.rs:IDLE_TICK`) of the `Stop` overwrites the
+     file before the stream samples it. `f` read at once is the tiebreak; re-run before suspecting
+     the hook.
+  5. **Two tasks: the count falls and the word holds.** `n=$(mark)`. Prompt
+     `Run "sleep 45" and "sleep 150", each with run_in_background, then end your turn.` When the
+     turn ends: `◔ background`, `f` shows `background: 2`. When the first is reported and that
+     woken turn ends: the cell **still** reads `◔ background` and `f` shows `1`. When the second
+     is: `○ ready`, `null`. `st $n` reads exactly `working`, `background`, `working`,
+     `background`, `working`, `ready`. **This is the check a build that clears on any woken
+     `Stop` fails.**
+  6. **A prompt during background work is `working`, and its end goes back to `background`.**
+     Prompt as in check 2, with `sleep 120`. While it runs, prompt `say hi`: the cell reads
+     `◐ working` during that turn and `◔ background` after it, with `f` showing `1`. Then wait for
+     `○ ready`.
+  7. **A cron is not background work.** Prompt
+     `Schedule a one-shot reminder 30 minutes from now with CronCreate, then end your turn.`
+     When the turn ends: `○ ready` and `background: null`. Then prompt `Delete that reminder.`
+     `CronCreate` is a deferred tool in Claude Code 2.1.303, present in the session that drafted
+     this; on a version without it the check is recorded as not runnable, not passed — the
+     outcome follows from the hook never reading `session_crons`, which
+     `a_cron_is_not_background_work` covers either way.
+  8. **The age, in full.** Prompt as in check 2, with `sleep 420`. Five minutes after the turn
+     ends, the cell reads **`◔ background >5m`**, untruncated, in a dashboard pane 80 columns
+     wide. **Run check 9 during this wait**, not after it: the sleep ends two minutes after
+     `>5m` appears.
+  9. **An old dashboard reads it as `ready`, not as a plain tab.** During check 8's wait, with
+     `f` showing `background: 1`, open a new pane in Tab 1 and run `$OLD`:
+     C's row reads process **`claude`** and status **`○ ready`** — the row an old dashboard
+     always drew. **A blank status cell is the failure §2.20's derived design exists to
+     prevent**: it is what an old reader does with a status word it cannot parse. Quit it and
+     close the pane, and let the sleep end in `○ ready`.
+  10. **Stopping a task from `/tasks`, recorded; and the next prompt repairs it.** Prompt as in
+      check 2, with `sleep 300`; when the turn ends, stop the shell from `/tasks` without typing a
+      prompt. Wait 10 seconds and **record** the cell and `f`: that is OQ-19 (c)'s answer, written
+      into OQ-19 at the close-out with §2.20's first hole worded to match. Either reading passes
+      this half — it is a measurement, not an assertion. **The assertion is the second half**:
+      prompt `say hi`, and when that turn ends the cell reads `○ ready` and `f` prints
+      `background: null`.
+  11. **The installed panex-tui draws the word.** Run `oko --version` once (Phase 11's
+      close-out), then `panex` in O and press `O`; with a background shell running in C as in
+      check 2, C's card reads `· background`, and every other card is unchanged. Quit panex.
+  12. **Nothing else moved.** `oko-hook --print-settings` is byte-for-byte what
+      `/tmp/oko-12-old/target/debug/oko-hook --print-settings` prints, apart from the binary's
+      path. `cargo test` is green, `cargo clippy --all-targets -- -D warnings` is clean and
+      `/Users/ivapo/dev/main/spec-driven-dev/bin/spec-lint --strict .` passes — it is not on
+      `PATH` here (`CLAUDE.md`). **Per binary, from counts measured at HEAD on 2026-10-18** —
+      `oko` 55, `oko-hook` 17, `oko-probe` 32 — none falls, and `cargo test -- --list` names
+      every test this phase's scope names.
+- **Close-out.** **Reconciliation.** `rules/claude-status.md` changes most: its event table's
+  `Stop` and `StopFailure` row writes `ready` **and the count**, a section states §2.20's
+  derivation, its rule over the table, and its clearing by the next `Stop`, and the holes gain
+  the one §2.20 leaves. **It is at its cap, 124/124, and its cap rises** — to whatever the
+  section needs, at most 140 — because the rule's subject gained a mechanism and this file is
+  the one place that has to say how it works; the commit says so. `rules/dashboard-ui.md`
+  (118/118) and `rules/follow-stream.md` (88/88) **pay in place**, as Phase 11's edits did,
+  and the commit names each cut: the first's status-column row gains `◔ background` and its
+  `Length(14)` paragraph becomes `Length(17)`, counted on the new widest cell; the second's
+  `status` row gains `background`. `rules/INDEX.md` is regenerated. `README.md`'s status table
+  gains a `◔ background` row beside `○ ready`, and its sentence on what never goes stale names
+  it. **The `CLAUDE.md` observable line changes** — "working / waiting for input / ready for a
+  prompt for a Claude Code tab" gains "or ready with work still running in the background".
+  **§1 gets a dated note** beside its 2026-08-15 one, whose "the shipped one is four" this phase
+  makes five; the sketch is re-read and the expected answer is no change, since no row in it
+  has background work. **§2.3 gets a dated note** on its `Stop` row's gloss, pointing at §2.20.
+  OQ-18 and OQ-19 are resolved in the review round, and the close-out confirms both still
+  describe what shipped. `/tmp/oko-12/`, `/tmp/oko-12.jsonl` and the `/tmp/oko-12-old`
+  worktree (`git worktree remove`) are deleted. Commit plan: **on `main`, no branch and no
+  PR**, as Phases 9–11 took — the spec, OQ-18's and OQ-19's resolutions and the review record
+  first, then the status file, then the hook and its fixtures, then the table and the stream,
+  then rules, README, `CLAUDE.md` and the dated notes. **One push.** The release is its own
+  `chore:` commit afterwards, as 0.3.0 through 0.5.0 were.
