@@ -13,6 +13,11 @@
 //!
 //! Ageing is two clocks and one ladder. [`Entry::tool`] chooses which clock a `working`
 //! expires on, and [`Age`] is what every status wears to say how long it has been true.
+//!
+//! **Two of the five statuses are derived at read time and never written**: `stale`, from the
+//! clock, and `background`, from [`Entry::background`] on a `ready` (§2.20). The file only
+//! ever says `working`, `waiting` or `ready`, which is what keeps an older dashboard reading
+//! a newer hook's file.
 //! **`#![allow(dead_code)]` is the cost of having no lib target.** These modules are
 //! compiled into each binary that declares them (§2.16), and a binary crate seeds dead-code
 //! analysis from `main` — so every item a given binary does not reach would warn. Three
@@ -55,11 +60,17 @@ pub enum Status {
     /// The agent is blocked on a human. **Never goes stale** — §1's own example is an agent
     /// that has been waiting twenty minutes, so ageing it out would delete the answer.
     Waiting,
-    /// The turn is over; ready for the next prompt. Legitimately hours old.
+    /// The turn is over and nothing it started is still running; ready for the next prompt.
+    /// Legitimately hours old.
     Ready,
     /// A `working` that stopped being refreshed. **Derived at read time, never written** —
     /// a user interrupt fires no hook at all, so nothing is left to write it.
     Stale,
+    /// A `ready` with work the turn started still running — a background shell, a `Monitor`,
+    /// a background subagent (§2.20). The agent takes a prompt, and it will also come back on
+    /// its own. **Derived at read time, never written**, so an older dashboard, which refuses
+    /// a status word it does not know, reads the file as the `ready` it is. Never goes stale.
+    Background,
 }
 
 impl Status {
@@ -70,6 +81,7 @@ impl Status {
             Status::Waiting => "waiting",
             Status::Ready => "ready",
             Status::Stale => "stale",
+            Status::Background => "background",
         }
     }
 
@@ -80,14 +92,15 @@ impl Status {
             Status::Waiting => "●",
             Status::Ready => "○",
             Status::Stale => "◌",
+            Status::Background => "◔",
         }
     }
 
-    /// The three a hook may write. `Stale` is deliberately absent.
+    /// The three a hook may write. `Stale` and `Background` are deliberately absent.
     fn as_written(self) -> Option<&'static str> {
         match self {
             Status::Working | Status::Waiting | Status::Ready => Some(self.word()),
-            Status::Stale => None,
+            Status::Stale | Status::Background => None,
         }
     }
 
@@ -104,9 +117,10 @@ impl Status {
 /// How long a status has been saying what it says, in buckets (§2.11).
 ///
 /// **One clock with one meaning**: time since the last hook fired, which is the same
-/// subtraction staleness makes. Read across the four statuses it stays coherent — how long
+/// subtraction staleness makes. Read across the five statuses it stays coherent — how long
 /// you have been blocking it, how long since it last did anything, how long you have been
-/// ignoring it, how long since the last credible signal.
+/// ignoring it, how long since the last credible signal, how long it has left work running
+/// unattended.
 ///
 /// **Buckets rather than seconds, and that is a requirement rather than a preference.** A
 /// live counter would redraw the table every second, forever, for a program whose whole
@@ -177,19 +191,31 @@ pub struct Entry {
     /// decide it — and it stays total when a row is added to that table.
     ///
     /// It is only ever consulted on `working`, which is what makes so simple a rule safe:
-    /// `waiting` and `ready` never age, so clearing a tool that is genuinely still running
-    /// costs a row nothing.
+    /// only a `working` ages out, so clearing a tool that is genuinely still running costs
+    /// any other row nothing.
     pub tool: Option<String>,
+    /// How many background tasks were running when the turn ended (§2.20).
+    ///
+    /// **`Stop` and `StopFailure` set it and every other event clears it** — [`tool`]'s rule
+    /// with the event changed, total for the same reason. It is only ever consulted on
+    /// `ready`, where a count above zero shows `background`; the next `Stop`, ending the turn a
+    /// finished task wakes, carries the list as it is then, and so is what clears it.
+    ///
+    /// [`tool`]: Entry::tool
+    pub background: u32,
 }
 
 impl Entry {
     /// The status a row shows and how long it has said so.
     ///
-    /// The age is `now - at` on all four statuses — one clock, one meaning (§2.11). Only a
+    /// The age is `now - at` on all five statuses — one clock, one meaning (§2.11). Only a
     /// `working` can age *out*, and which threshold it ages against is the one thing [`tool`]
-    /// decides: a tool in flight is not silence, so it gets the longer clock.
+    /// decides: a tool in flight is not silence, so it gets the longer clock. A `ready` whose
+    /// [`background`] count is above zero shows `background`, and never ages out: a dev server
+    /// left running all afternoon is a true answer.
     ///
     /// [`tool`]: Entry::tool
+    /// [`background`]: Entry::background
     pub fn shown(
         &self,
         now: OffsetDateTime,
@@ -201,10 +227,10 @@ impl Entry {
         let secs = u64::try_from((now - self.at).whole_seconds());
         let age = secs.map_or(Duration::ZERO, Duration::from_secs);
         let expired = if self.tool.is_some() { tool_stale_after } else { stale_after };
-        let status = if self.status == Status::Working && age >= expired {
-            Status::Stale
-        } else {
-            self.status
+        let status = match self.status {
+            Status::Working if age >= expired => Status::Stale,
+            Status::Ready if self.background > 0 => Status::Background,
+            status => status,
         };
         Shown { status, age: Age::bucket(age) }
     }
@@ -224,6 +250,10 @@ impl Entry {
         // sees the file it has always seen, and the common line stays short.
         if let Some(tool) = &self.tool {
             value["tool"] = serde_json::Value::String(tool.clone());
+        }
+        // The same, at zero: nothing running is the common case, and the absence is it.
+        if self.background > 0 {
+            value["background"] = self.background.into();
         }
         Ok(value.to_string())
     }
@@ -246,6 +276,13 @@ impl Entry {
             // Optional, deliberately: every file Phase 3 wrote lacks this key, and `field`
             // above is required-only. A missing tool is "no tool", not a corrupt file.
             tool: v.get("tool").and_then(serde_json::Value::as_str).map(str::to_owned),
+            // Optional for the same reason. Missing or unreadable is "nothing running", which
+            // reads as the `ready` every earlier file meant.
+            background: v
+                .get("background")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or(0),
         })
     }
 }
@@ -456,6 +493,7 @@ mod tests {
             status,
             at,
             tool: None,
+            background: 0,
         }
     }
 
@@ -595,6 +633,46 @@ mod tests {
         assert!(entry(Status::Stale, now).to_json().is_err());
     }
 
+    #[test]
+    fn background_is_derived_and_never_written() {
+        let now = OffsetDateTime::from_unix_timestamp(1_755_216_000).unwrap();
+        assert!(entry(Status::Background, now).to_json().is_err());
+        // And a file that says it anyway is refused, as an older dashboard would refuse it —
+        // which is why the hook writes `ready` and a count instead (§2.20).
+        let written = r#"{"iterm_session_id":"AAAA","claude_session_id":"BBBB",
+                          "status":"background","at":"2026-10-18T00:00:00Z"}"#;
+        assert!(Entry::from_json(written).is_err());
+    }
+
+    #[test]
+    fn a_ready_with_work_running_shows_background_and_never_ages() {
+        let now = OffsetDateTime::from_unix_timestamp(1_755_216_000).unwrap();
+        let mut e = entry(Status::Ready, now - Duration::from_secs(2 * 3600));
+        e.background = 1;
+        assert_eq!(
+            e.shown(now, SHORT, LONG),
+            Shown { status: Status::Background, age: Some(Age::H1) }
+        );
+        e.background = 0;
+        assert_eq!(e.shown(now, SHORT, LONG), Shown { status: Status::Ready, age: Some(Age::H1) });
+    }
+
+    #[test]
+    fn the_background_key_is_absent_at_zero() {
+        let now = OffsetDateTime::from_unix_timestamp(1_755_216_000).unwrap();
+        let mut e = entry(Status::Ready, now);
+        assert!(!e.to_json().unwrap().contains("background"));
+        e.background = 2;
+        let read = Entry::from_json(&e.to_json().unwrap()).unwrap();
+        assert_eq!(read, e);
+        assert_eq!(read.background, 2);
+
+        // Byte for byte what Phase 3 wrote, with neither `tool` nor `background`.
+        let phase_3 = r#"{"iterm_session_id":"AAAA","claude_session_id":"BBBB",
+                          "status":"ready","at":"2026-08-15T00:00:00Z"}"#;
+        assert_eq!(Entry::from_json(phase_3).unwrap().background, 0);
+    }
+
     /// A directory of our own, named for the test so two of them cannot collide.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("oko-status-test-{name}"));
@@ -610,6 +688,7 @@ mod tests {
             status,
             at: OffsetDateTime::now_utc(),
             tool: None,
+            background: 0,
         };
         fs::write(file_of(dir, iterm), entry.to_json().unwrap()).unwrap();
     }

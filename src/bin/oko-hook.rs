@@ -85,12 +85,13 @@ fn run() -> Result<()> {
         string(&event, "hook_event_name").context("the hook event carries no hook_event_name")?;
 
     match action(hook_event_name, &event) {
-        Some(Action::Write(status, tool)) => write(&Entry {
+        Some(Action::Write(status, tool, background)) => write(&Entry {
             iterm_session_id,
             claude_session_id,
             status,
             at: OffsetDateTime::now_utc(),
             tool,
+            background,
         }),
         Some(Action::Delete) => remove_if_owned(&iterm_session_id, &claude_session_id),
         // An event we do not register for, or one whose matcher let through something we do
@@ -101,11 +102,12 @@ fn run() -> Result<()> {
 
 /// What one hook firing does to the status file.
 ///
-/// `Write` carries the tool in flight as well as the status, because [`write`] builds a
-/// whole `Entry` and renames it over the file — there is no "leave that field alone", so
-/// every event that writes has to decide it (§2.12).
+/// `Write` carries the tool in flight and the count of background tasks as well as the
+/// status, because [`write`] builds a whole `Entry` and renames it over the file — there is
+/// no "leave that field alone", so every event that writes has to decide both (§2.12,
+/// §2.20).
 enum Action {
-    Write(Status, Option<String>),
+    Write(Status, Option<String>, u32),
     Delete,
 }
 
@@ -118,9 +120,12 @@ enum Action {
 /// **The tool in flight is one rule over that whole table: `PreToolUse` sets it, every other
 /// event clears it** (§2.12). Enumerating ten answers would leave the eleventh event to a
 /// guess; this way the rule is total by construction and stays total when a row is added.
+/// **The background count is the same rule with the event changed: `Stop` and `StopFailure`
+/// set it, every other event clears it** (§2.20).
 fn action(hook_event_name: &str, event: &serde_json::Value) -> Option<Action> {
-    // Every arm below writes no tool. The one that does is spelled out on its own.
-    let idle = |status| Some(Action::Write(status, None));
+    // Every arm below writes no tool and no background work. The two that do are spelled
+    // out on their own.
+    let idle = |status| Some(Action::Write(status, None, 0));
 
     match hook_event_name {
         // `compact` fires on auto-compaction *mid-turn*: registered bare it would tell a
@@ -134,9 +139,11 @@ fn action(hook_event_name: &str, event: &serde_json::Value) -> Option<Action> {
         // The one event that records a tool: it starts one, and nothing has finished it.
         // A `working` carrying a tool ages against `OKO_TOOL_STALE_AFTER` instead, so a
         // quiet fifteen-minute build reports `working` rather than `stale`.
-        "PreToolUse" => {
-            Some(Action::Write(Status::Working, string(event, "tool_name").map(str::to_owned)))
-        }
+        "PreToolUse" => Some(Action::Write(
+            Status::Working,
+            string(event, "tool_name").map(str::to_owned),
+            0,
+        )),
 
         // A tool finished, or a prompt was submitted, or auto mode denied a call and the
         // agent runs on. `PreToolUse` above is also what bounds the deny path: nothing fires
@@ -160,7 +167,14 @@ fn action(hook_event_name: &str, event: &serde_json::Value) -> Option<Action> {
         // The turn is over, however it ended. `Stop` does not fire on a user interrupt and
         // an API error fires `StopFailure` instead — the interrupt is the hole OQ-4 (c)'s
         // staleness rule exists for, not something an eleventh registration fixes.
-        "Stop" | "StopFailure" => idle(Status::Ready),
+        //
+        // Over is not idle: the turn may have left work running, and a `ready` carrying a
+        // count shows `background` (§2.20). The reference documents the array on `Stop`
+        // alone; an API error does not stop the shells a turn started, and an absent array
+        // counts as nothing, so reading it on `StopFailure` costs nothing if it never comes.
+        "Stop" | "StopFailure" => {
+            Some(Action::Write(Status::Ready, None, background_tasks(event)))
+        }
 
         "SessionEnd" => Some(Action::Delete),
 
@@ -182,6 +196,29 @@ fn iterm_session_id() -> Option<String> {
     // deliberately not the key — positions change when tabs are reordered.
     let uuid = raw.split_once(':').map_or(raw.as_str(), |(_, uuid)| uuid);
     (!uuid.is_empty()).then(|| uuid.to_string())
+}
+
+/// The `status` words that mean a background task is still running — OQ-18's answer,
+/// measured against Claude Code 2.1.303. A finished task leaves the list rather than changing
+/// its word, so this is the whole set; a word a later version adds fails *off*, counting as
+/// nothing and reading as the `ready` every earlier build showed.
+const RUNNING: &[&str] = &["running"];
+
+/// How many entries of the event's `background_tasks` are running.
+///
+/// Counted by `status` and never by `type`, which OQ-18 found already disagrees with the
+/// reference — a `Monitor` is listed as `"shell"`. A missing array, or an entry with no
+/// `status`, adds nothing. **`session_crons` is not read**: a cron is a time, not a process.
+fn background_tasks(event: &serde_json::Value) -> u32 {
+    let Some(tasks) = event.get("background_tasks").and_then(serde_json::Value::as_array)
+    else {
+        return 0;
+    };
+    let running = tasks
+        .iter()
+        .filter(|task| string(task, "status").is_some_and(|word| RUNNING.contains(&word)))
+        .count();
+    u32::try_from(running).unwrap_or(u32::MAX)
 }
 
 fn string<'a>(event: &'a serde_json::Value, key: &str) -> Option<&'a str> {
@@ -270,18 +307,30 @@ mod tests {
         v
     }
 
-    fn written(name: &str, extra: serde_json::Value) -> Option<(Status, Option<String>)> {
+    fn written(name: &str, extra: serde_json::Value) -> Option<(Status, Option<String>, u32)> {
         match action(name, &event(name, extra)) {
-            Some(Action::Write(status, tool)) => Some((status, tool)),
+            Some(Action::Write(status, tool, background)) => Some((status, tool, background)),
             _ => None,
         }
+    }
+
+    /// OQ-18's table, verbatim: each `background_tasks` array a turn's `Stop` carried.
+    fn oq18(case: char) -> serde_json::Value {
+        let tasks = match case {
+            'a' | 'e' => serde_json::json!([]),
+            'b' => serde_json::json!([{"id":"bzoff0jnj","type":"shell","status":"running","description":"Run sleep in background","command":"sleep 30"}]),
+            'c' => serde_json::json!([{"id":"b18qut1lj","type":"shell","status":"running","description":"sleep 20 then echo done","command":"sleep 20; echo done"}]),
+            'd' => serde_json::json!([{"id":"a7400e40a873f4913","type":"subagent","status":"running","description":"Sleep then report","agent_type":"general-purpose"}]),
+            _ => unreachable!(),
+        };
+        serde_json::json!({ "background_tasks": tasks, "session_crons": [] })
     }
 
     #[test]
     fn only_pre_tool_use_records_a_tool() {
         assert_eq!(
             written("PreToolUse", serde_json::json!({ "tool_name": "Bash" })),
-            Some((Status::Working, Some("Bash".to_string())))
+            Some((Status::Working, Some("Bash".to_string()), 0))
         );
 
         // §2.12's rule is total over §2.3's table, so this list is that table minus the one
@@ -302,13 +351,67 @@ mod tests {
             ("StopFailure", serde_json::json!({}), Status::Ready),
         ];
         for (name, extra, status) in others {
-            assert_eq!(written(name, extra), Some((status, None)), "{name}");
+            assert_eq!(written(name, extra), Some((status, None, 0)), "{name}");
         }
     }
 
     #[test]
+    fn only_stop_records_background_work() {
+        for case in ['b', 'c', 'd'] {
+            assert_eq!(written("Stop", oq18(case)), Some((Status::Ready, None, 1)), "({case})");
+        }
+        assert_eq!(written("StopFailure", oq18('b')), Some((Status::Ready, None, 1)));
+
+        // Every other event in the table, handed the same array — which no real one carries,
+        // and which is what proves the rule is the event's and not the field's.
+        let with = |mut extra: serde_json::Value| {
+            extra["background_tasks"] = oq18('b')["background_tasks"].clone();
+            extra
+        };
+        let notification =
+            |kind: &str| serde_json::json!({ "notification_type": kind.to_string() });
+        let others = [
+            ("SessionStart", serde_json::json!({ "source": "startup" })),
+            ("UserPromptSubmit", serde_json::json!({})),
+            ("PreToolUse", serde_json::json!({ "tool_name": "Bash" })),
+            ("PostToolUse", serde_json::json!({ "tool_name": "Bash" })),
+            ("PermissionDenied", serde_json::json!({ "tool_name": "Bash" })),
+            ("Notification", notification("permission_prompt")),
+            ("Notification", notification("elicitation_complete")),
+        ];
+        for (name, extra) in others {
+            assert_eq!(written(name, with(extra)).map(|w| w.2), Some(0), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_stop_with_nothing_running_is_plain_ready() {
+        for case in ['a', 'e'] {
+            assert_eq!(written("Stop", oq18(case)), Some((Status::Ready, None, 0)), "({case})");
+        }
+        assert_eq!(written("Stop", serde_json::json!({})), Some((Status::Ready, None, 0)));
+        // Two shells running, one finished-or-unworded: only the word OQ-18 saw counts.
+        let mixed = serde_json::json!({ "background_tasks": [
+            {"id":"x","type":"shell","status":"running"},
+            {"id":"y","type":"shell","status":"running"},
+            {"id":"z","type":"shell","status":"completed"},
+            {"id":"w","type":"shell"},
+        ]});
+        assert_eq!(written("Stop", mixed), Some((Status::Ready, None, 2)));
+    }
+
+    #[test]
+    fn a_cron_is_not_background_work() {
+        let e = serde_json::json!({
+            "background_tasks": [],
+            "session_crons": [{"id":"c1","cron":"30 14 18 10 *","prompt":"remind me","recurring":false}],
+        });
+        assert_eq!(written("Stop", e), Some((Status::Ready, None, 0)));
+    }
+
+    #[test]
     fn a_pre_tool_use_without_a_name_falls_back_to_the_ordinary_clock() {
-        assert_eq!(written("PreToolUse", serde_json::json!({})), Some((Status::Working, None)));
+        assert_eq!(written("PreToolUse", serde_json::json!({})), Some((Status::Working, None, 0)));
     }
 
     #[test]

@@ -419,6 +419,8 @@ fn render_status(shown: Option<Shown>) -> Line<'static> {
         Status::Waiting => Color::Yellow,
         Status::Ready => Color::Green,
         Status::Stale => Color::DarkGray,
+        // Not `ready`'s green, which would say "done" in colour while the word said otherwise.
+        Status::Background => Color::Blue,
     };
     let mut spans = vec![
         Span::styled(status.glyph(), Style::new().fg(colour)),
