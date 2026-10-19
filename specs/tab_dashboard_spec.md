@@ -99,6 +99,11 @@ because it fires no hook at all (OQ-4 (c)). The sentence above and the sketch be
 predate it, and the sketch's header line predates the status column itself, naming three
 columns for a table that draws four.
 
+**CORRECTED 2026-10-18 (Phase 12's close-out).** Five, now: `◔ background` is a `ready` whose
+turn left work running — a background shell, a `Monitor`, a background subagent — derived
+from `Stop`'s `background_tasks` and never written (§2.20). The sketch was re-read and needs
+no change, since none of its rows has background work.
+
 The end state, sketched — **corrected to what shipped**:
 
 ```
@@ -253,6 +258,12 @@ hooks reference on 2026-08-15, and the ones that are missing are what make a row
 | `Stop` | the turn finished; ready for the next prompt | `ready` |
 | `StopFailure` | the turn ended on an API error | `ready` |
 | `SessionEnd` | the session is over | deletes the file |
+
+**CORRECTED 2026-10-18 (Phase 12's close-out).** The `Stop` row's gloss is no longer the
+whole story: a turn can finish with work it started still running, and "ready for the next
+prompt" then hides that the agent will come back on its own. Both rows still write `ready`,
+now with a count of the background tasks still running, and a count above zero shows
+`◔ background` — §2.20.
 
 **Most of those rows exist because the naive three-event version writes a status that
 lies**, which §2.7 rejects screen-scraping to avoid — so they are corrections, not

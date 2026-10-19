@@ -45,7 +45,7 @@ sorted, which is what makes the suppression rule below a string comparison.
 | `tab` | 1-based tab position; two sessions of a split tab share it |
 | `name` | `user.okoName` if set, else the last component of `path`; `null` when neither |
 | `path` | the working directory, **unabbreviated** — no `~`, no truncation |
-| `status` | `working`, `waiting`, `ready`, `stale`, or `null` for a session that is not a Claude tab |
+| `status` | `working`, `waiting`, `ready`, `stale`, `background`, or `null` for a non-Claude tab |
 | `age` | `">5m"`, `">10m"`, `">30m"`, `">1h"`, or `null` under five minutes |
 | `claude` | `true`, **present only** on a row carrying a status |
 | `job` | `jobName` verbatim, **present only** on a row without one. 16-byte truncation and all |
@@ -55,8 +55,8 @@ sorted, which is what makes the suppression rule below a string comparison.
 and it arrived under **`schema: 1`** — a key an old consumer ignores does not make it wrong.
 
 **Three things the schema does not do.** `age` is the bucket and never seconds. `status` is
-the **effective** value, `stale` included, because that one is derived at read time from two
-clocks and a consumer handed the written value would have to re-implement both. And `name`
+the **effective** value, `stale` and `background` included: both are derived at read time,
+and a consumer handed the written value would have to re-implement two clocks and a count. And `name`
 and `path` are what Oko knows rather than what the table draws — the `-` placeholder, `~` and
 the 16-cell truncation are the table's decorations.
 

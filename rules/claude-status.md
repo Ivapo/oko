@@ -8,7 +8,7 @@ covers: >
   how a Claude Code tab reports what it is doing — the hook binary and the events it
   answers to, the status file's path and format, the identity join to a row, the two clocks
   a value ages on, what deletes a file, and the holes that remain
-max_lines: 124
+max_lines: 140
 generated: 2026-08-16
 ---
 
@@ -37,7 +37,7 @@ nothing but `--print-settings` it answered `--help` by blocking in `read_to_stri
 | `PermissionDenied` (`*`) — **auto mode** denied a call; the agent runs on | `working` |
 | `Notification` (`permission_prompt`, `agent_needs_input`, `elicitation_dialog`, `elicitation_url_dialog`) | `waiting` |
 | `Notification` (`elicitation_complete`, `elicitation_response`) | `working` |
-| `Stop`, `StopFailure` | `ready` |
+| `Stop`, `StopFailure` | `ready`, **and the count of background tasks running** |
 | `SessionEnd` | deletes the file |
 
 **Every matcher is load-bearing**, and `src/bin/oko-hook.rs:action` repeats them as a
@@ -68,10 +68,11 @@ moves the directory's mtime.
 
     {"iterm_session_id":"F79BC…","claude_session_id":"…","status":"working","at":"…Z"}
     {…,"status":"working","at":"…Z","tool":"Bash"}      ← PreToolUse only
+    {…,"status":"ready","at":"…Z","background":1}       ← Stop with work running
 
-`tool` is **absent** rather than null when there is none, so every file Phase 3 wrote still
-reads: `src/status.rs:Entry::from_json` takes it through an optional accessor, not the
-required-field closure the other four use.
+`tool` and `background` are **absent** rather than null or zero when there is none, so every
+file Phase 3 wrote still reads: `src/status.rs:Entry::from_json` takes them through optional
+accessors, not the required-field closure the other four use.
 
 The join key is the UUID after the colon in `TERM_SESSION_ID`, then `ITERM_SESSION_ID` —
 the same two names in the same order as `src/iterm/watch.rs:resolve_own_session`. **A pane
@@ -92,9 +93,9 @@ against `src/iterm/watch.rs:Row.session_id`, never a process name.
    against those would destroy Claude tabs' status in other windows, and two Okos would
    delete each other's files continuously. **Buried sessions count as alive.** It runs in
    `rescan`, the only place a closing tab produces an event, and covers a `kill -9`.
-3. `working` older than its threshold renders `◌ stale`. **`waiting` and `ready` never age**
-   — an agent waiting twenty minutes is the answer the product exists to give, and `ready` is
-   legitimately hours old.
+3. `working` older than its threshold renders `◌ stale`. **`waiting`, `ready` and
+   `background` never age** — an agent waiting twenty minutes is the answer the product
+   exists to give, and `ready` is legitimately hours old.
 
 ## The two clocks, and the ladder
 
@@ -121,6 +122,19 @@ behaviour, not a wrong answer. Pressing Esc *during* a tool leaves it outstandin
 row claims `working` for up to the longer threshold; the next `UserPromptSubmit` corrects it
 within seconds, which is why interrupt-then-walk-away is the accepted cost.
 
+## Background work
+
+A turn can end with work still running — a `run_in_background` shell, a `Monitor`, a
+background subagent. `src/bin/oko-hook.rs:background_tasks` counts `Stop`'s
+`background_tasks` entries whose `status` is `"running"`, the one word measured (OQ-18), and
+never reads `type` (a `Monitor` is listed as `"shell"`). A `ready` with a count above zero
+shows **`◔ background`** (`src/status.rs:Entry::shown`) — **derived, never written**, like
+`stale`, since `from_json` refuses a word it does not know and an older dashboard would drop
+the row. **`Stop` and `StopFailure` set the count; every other event clears it.** A finished
+task wakes the agent into one turn, `UserPromptSubmit` → `Stop` (OQ-19), whose list holds
+only what still runs: `background` → `working` → `background` with one fewer, or `ready`. A
+background subagent's tool calls write `working` while it works. Crons do not count.
+
 ## Holes, stated
 
 - **A human denying a permission fires nothing.** `PermissionDenied` is auto mode's denial;
@@ -135,3 +149,5 @@ within seconds, which is why interrupt-then-walk-away is the accepted cost.
   `Notification`'s ~6 s delay is treated as a filter instead.
 - Unsettled: whether Claude Code runs other tools in a batch while a permission dialog is
   open, which would let a `PostToolUse` overwrite a live `waiting`.
+- **A background task that ends without waking the agent leaves `background`** until the
+  next event — a human's next prompt writes `working`.

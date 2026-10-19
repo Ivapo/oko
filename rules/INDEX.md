@@ -2,7 +2,7 @@
 
 # Rules
 
-- **[claude-status](claude-status.md)** — generated 2026-08-16 · 3 sources · 124/124 lines
+- **[claude-status](claude-status.md)** — generated 2026-08-16 · 3 sources · 140/140 lines
   how a Claude Code tab reports what it is doing — the hook binary and the events it answers to, the status file's path and format, the identity join to a row, the two clocks a value ages on, what deletes a file, and the holes that remain
 - **[dashboard-ui](dashboard-ui.md)** — generated 2026-08-16 · 4 sources · 118/118 lines
   the dashboard Oko draws — its columns and where each value comes from, the keys it answers to, the one modal state it has, how a selection survives a changing row set, and the path by which rows track the window without polling

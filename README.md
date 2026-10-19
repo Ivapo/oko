@@ -51,6 +51,7 @@ one is blocked without your visiting all three.
 | `◐ working` | the agent is doing something |
 | `● waiting` | it is blocked on you — a permission, a question |
 | `○ ready` | the turn is over; it wants a prompt |
+| `◔ background` | the turn is over, but work it started — a background shell, a `Monitor`, a background agent — is still running; it takes a prompt, and will also come back on its own |
 | `◌ stale` | it *said* `working`, and has said nothing since. Oko does not know |
 
 Each carries **how long it has said so** — nothing under five minutes, then `>5m`, `>10m`,
@@ -60,9 +61,9 @@ in a tab all day redraws a handful of times, not once a second.
 
 `stale` is the honest answer to a case nothing reports: pressing Esc to interrupt a turn
 fires no hook at all, so the last thing Oko heard was `working`. After
-`OKO_STALE_AFTER` (default 10 minutes) the row stops claiming it. `waiting` and `ready`
-never go stale — an agent that has been waiting twenty minutes is exactly the thing you
-want to see, and `ready` is legitimately hours old.
+`OKO_STALE_AFTER` (default 10 minutes) the row stops claiming it. `waiting`, `ready` and
+`background` never go stale — an agent that has been waiting twenty minutes is exactly the
+thing you want to see, `ready` is legitimately hours old, and so is a dev server left running.
 
 **A tool still running is not silence.** If the hook recorded a tool that has not finished,
 the row ages against `OKO_TOOL_STALE_AFTER` (default 45 minutes) instead, so a quiet

@@ -30,7 +30,7 @@ One row per session in Oko's own window, ordered by tab index then position with
 | `tab` | 1-based position of the tab in its window's `tabs[]`. Two sessions of a split tab share it. |
 | `name` | `user.okoName` if set, else the last component of `path`, else `-`. Resolved in `src/iterm/watch.rs:snapshot`, never stored. |
 | `process` | The literal **`claude`** for a row carrying a status; otherwise `jobName` **verbatim** — iTerm2 truncates that to 16 bytes and the column does not repair it. |
-| `status` | Glyph, word and age (`src/ui.rs:render_status`): `◐ working`, `● waiting`, `○ ready`, `◌ stale`, followed by `>5m`, `>10m`, `>30m` or `>1h` once there is one. Empty for a row with no status. |
+| `status` | Glyph, word and age (`src/ui.rs:render_status`): `◐ working`, `● waiting`, `○ ready`, `◌ stale`, `◔ background`, then `>5m`, `>10m`, `>30m` or `>1h` once there is one. Empty for a row with no status. |
 | `where` | `path`, with `$HOME` rendered as `~` (`src/ui.rs:abbreviate_home`). |
 
 **The name is derived at snapshot time** (§2.10): an un-named row shows where it *is*, so
@@ -38,10 +38,10 @@ the label follows a `cd`, and storing that default at first sight would freeze i
 directory the pane held when Oko started. `Row.stored_name` holds the variable; `Row.name`
 holds the resolved label and is `None` on the watcher's own rows, as `Row.status` is.
 
-**`Length(14)` on the status column is counted, not chosen.** `◐ working >10m` is 14 cells —
-the glyphs are East-Asian-Ambiguous and score 1. At 13 ratatui truncates silently and `>10m`
-renders `>10`, so `src/ui.rs`'s test draws the table into a `TestBackend` and asserts the
-cell survives: a correct `Line::width` would not save a layout one cell too narrow.
+**`Length(17)` on the status column is counted, not chosen.** `◔ background >10m` is 17
+cells — each glyph scores 1. At 16 ratatui truncates silently and `>10m` renders `>10`, so
+`src/ui.rs`'s test draws the table into a `TestBackend` and asserts the cell survives: a
+correct `Line::width` would not save a layout one cell too narrow.
 
 **The process column is not a source of identity, and never was.** `jobName` is the deepest
 job in the session's *foreground process group* — some descendant for a Claude tab (`node`,
