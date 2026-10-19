@@ -43,11 +43,12 @@ use crate::status::{Shown, Status};
 
 /// The status column's width, and it is **counted rather than trusted**.
 ///
-/// `◐ working >10m` is 1 + 1 + 7 + 1 + 4 = 14 cells: the glyphs are East-Asian-Ambiguous and
-/// score 1, which the `Length(10)` that held `● waiting` (9) before the age arrived already
-/// demonstrated. At 13 ratatui truncates silently, `>10m` renders `>10`, and the gate check
-/// for the ladder fails against a correct bucket function. A test below asserts it.
-const STATUS_WIDTH: u16 = 14;
+/// `◔ background >10m` is 1 + 1 + 10 + 1 + 4 = 17 cells: the glyphs score 1 apiece — `◔` is
+/// East-Asian-Width N and the others Ambiguous — which the `Length(10)` that held `● waiting`
+/// (9) before the age arrived already demonstrated. At 16 ratatui truncates silently, `>10m`
+/// renders `>10`, and the gate check for the age fails against a correct bucket function. A
+/// test below asserts it.
+const STATUS_WIDTH: u16 = 17;
 
 /// Everything the event loop consumes, from either thread.
 pub enum AppEvent {
@@ -426,7 +427,8 @@ fn render_status(shown: Option<Shown>) -> Line<'static> {
         Span::styled(status.glyph(), Style::new().fg(colour)),
         Span::raw(" "),
         // `stale` is the one status that is not a claim about the agent but about Oko's own
-        // knowledge, so it is dimmed rather than stated in the same voice as the other three.
+        // knowledge, so it is dimmed rather than stated in the same voice as the other four.
+        // `background` is a claim about the agent, so it is not.
         match status {
             Status::Stale => Span::styled(status.word(), Style::new().fg(Color::DarkGray)),
             _ => Span::raw(status.word()),
@@ -472,14 +474,15 @@ mod tests {
         // bucket function — so this is the literal that has to be measured rather than
         // reasoned about.
         let mut widest = 0;
-        for status in [Status::Working, Status::Waiting, Status::Ready, Status::Stale] {
+        for status in
+            [Status::Working, Status::Waiting, Status::Ready, Status::Stale, Status::Background]
+        {
             for age in [None, Some(Age::M5), Some(Age::M10), Some(Age::M30), Some(Age::H1)] {
                 widest = widest.max(render_status(Some(Shown { status, age })).width());
             }
         }
-        // `◐ working >10m` — 1 + 1 + 7 + 1 + 4. The glyphs are East-Asian-Ambiguous and
-        // score 1 apiece.
-        assert_eq!(widest, 14);
+        // `◔ background >10m` — 1 + 1 + 10 + 1 + 4. The glyphs score 1 apiece.
+        assert_eq!(widest, 17);
         assert_eq!(widest, usize::from(STATUS_WIDTH));
     }
 

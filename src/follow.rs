@@ -180,9 +180,9 @@ fn snapshot_line(snapshot: &Snapshot) -> String {
 ///
 /// Three things it deliberately does not do. **`age` is the bucket, never seconds** — seconds
 /// would make every line differ every second and destroy §2.11's quietness at the interface.
-/// **`status` is the effective one**, `stale` included, because that value is derived at read
-/// time and a consumer given the written one would have to re-implement two clocks to get it
-/// right. And `name` and `path` are what Oko *knows*: no `-` placeholder, no `~`, no
+/// **`status` is the effective one**, `stale` and `background` included, because both are
+/// derived at read time and a consumer given the written one would have to re-implement two
+/// clocks and a count to get it right (§2.20). And `name` and `path` are what Oko *knows*: no `-` placeholder, no `~`, no
 /// truncation to a column width — those are the table's decorations, not the interface's.
 ///
 /// **A row carrying a status carries `claude: true` and no `job`** (OQ-7, sharpened by OQ-12).
@@ -369,6 +369,19 @@ mod tests {
             line_of(vec![claude_row(Shown { status: Status::Stale, age: Some(Age::M30) })]);
         assert_eq!(value["rows"][0]["status"], "stale");
         assert_eq!(value["rows"][0]["claude"], true);
+    }
+
+    #[test]
+    fn background_is_a_status_the_stream_publishes() {
+        // Derived like `stale`, from a `ready` carrying a count, and published as the word
+        // alone: the count stays in the file (§2.20). A fifth value under `schema: 1`, since
+        // panex-tui's fallback arm draws a word it does not know.
+        let value =
+            line_of(vec![claude_row(Shown { status: Status::Background, age: Some(Age::M5) })]);
+        assert_eq!(value["rows"][0]["status"], "background");
+        assert_eq!(value["rows"][0]["age"], ">5m");
+        assert_eq!(value["rows"][0]["claude"], true);
+        assert!(value["rows"][0].get("background").is_none());
     }
 
     fn written(snapshots: &[Snapshot]) -> Vec<String> {
